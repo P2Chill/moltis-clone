@@ -1561,8 +1561,12 @@ fn has_oauth_tokens_for_provider(
         || (provider_name == "anthropic"
             && std::env::var("HOME").ok().is_some_and(|home| {
                 let path = Path::new(&home).join(".claude").join(".credentials.json");
-                let Ok(raw) = std::fs::read_to_string(&path) else { return false; };
-                let Ok(json) = serde_json::from_str::<Value>(&raw) else { return false; };
+                let Ok(raw) = std::fs::read_to_string(&path) else {
+                    return false;
+                };
+                let Ok(json) = serde_json::from_str::<Value>(&raw) else {
+                    return false;
+                };
                 json["claudeAiOauth"]["accessToken"]
                     .as_str()
                     .is_some_and(|t| !t.trim().is_empty())
@@ -1645,13 +1649,12 @@ impl ProviderSetupService for LiveProviderSetupService {
 
                 // For providers that support both API key and OAuth,
                 // show "oauth" if the user authenticated via OAuth tokens.
-                let effective_auth_type = if provider.auth_type == "api-key"
-                    && self.has_oauth_tokens(provider.name)
-                {
-                    "oauth"
-                } else {
-                    provider.auth_type
-                };
+                let effective_auth_type =
+                    if provider.auth_type == "api-key" && self.has_oauth_tokens(provider.name) {
+                        "oauth"
+                    } else {
+                        provider.auth_type
+                    };
 
                 Some((
                     offered_rank.get(&normalized_name).copied(),

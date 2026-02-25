@@ -402,7 +402,6 @@ fn read_claude_oauth_token() -> Option<secrecy::Secret<String>> {
     Some(secrecy::Secret::new(token))
 }
 
-
 /// Return the known context window size (in tokens) for a model ID.
 /// Falls back to 200,000 for unknown models.
 pub fn context_window_for_model(model_id: &str) -> u32 {
@@ -1413,7 +1412,8 @@ impl ProviderRegistry {
     ) {
         // Anthropic — register all known Claude models when API key or OAuth token is available.
         let anthropic_oauth_token = read_claude_oauth_token();
-        let anthropic_api_key = resolve_api_key(config, "anthropic", "ANTHROPIC_API_KEY", env_overrides);
+        let anthropic_api_key =
+            resolve_api_key(config, "anthropic", "ANTHROPIC_API_KEY", env_overrides);
         let anthropic_use_bearer = anthropic_api_key.is_none() && anthropic_oauth_token.is_some();
         if config.is_enabled("anthropic")
             && let Some(key) = anthropic_api_key.or(anthropic_oauth_token)
@@ -1444,22 +1444,21 @@ impl ProviderRegistry {
                 if self.has_provider_model(&provider_label, &model_id) {
                     continue;
                 }
-                let provider: Arc<dyn LlmProvider + Send + Sync> =
-                    if anthropic_use_bearer {
-                        Arc::new(anthropic::AnthropicProvider::with_alias_bearer(
-                            key.clone(),
-                            model_id.clone(),
-                            base_url.clone(),
-                            alias.clone(),
-                        ))
-                    } else {
-                        Arc::new(anthropic::AnthropicProvider::with_alias(
-                            key.clone(),
-                            model_id.clone(),
-                            base_url.clone(),
-                            alias.clone(),
-                        ))
-                    };
+                let provider: Arc<dyn LlmProvider + Send + Sync> = if anthropic_use_bearer {
+                    Arc::new(anthropic::AnthropicProvider::with_alias_bearer(
+                        key.clone(),
+                        model_id.clone(),
+                        base_url.clone(),
+                        alias.clone(),
+                    ))
+                } else {
+                    Arc::new(anthropic::AnthropicProvider::with_alias(
+                        key.clone(),
+                        model_id.clone(),
+                        base_url.clone(),
+                        alias.clone(),
+                    ))
+                };
                 self.register(
                     ModelInfo {
                         id: model_id,

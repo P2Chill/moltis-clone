@@ -90,7 +90,11 @@ impl AnthropicProvider {
             let content = std::fs::read_to_string(&path).ok()?;
             let json: serde_json::Value = serde_json::from_str(&content).ok()?;
             let token = json["claudeAiOauth"]["accessToken"].as_str()?.to_string();
-            if token.is_empty() { None } else { Some(token) }
+            if token.is_empty() {
+                None
+            } else {
+                Some(token)
+            }
         });
         token.unwrap_or_else(|| self.api_key.expose_secret().to_string())
     }
@@ -282,7 +286,11 @@ impl LlmProvider for AnthropicProvider {
             .client
             .post(format!("{}/v1/messages", self.base_url))
             .header(
-                if self.use_bearer { "Authorization" } else { "x-api-key" },
+                if self.use_bearer {
+                    "Authorization"
+                } else {
+                    "x-api-key"
+                },
                 if self.use_bearer {
                     format!("Bearer {}", self.live_token())
                 } else {
@@ -291,7 +299,14 @@ impl LlmProvider for AnthropicProvider {
             )
             .header("anthropic-version", "2023-06-01")
             .header("content-type", "application/json")
-            .header("anthropic-beta", if self.use_bearer { "oauth-2025-04-20" } else { "" })
+            .header(
+                "anthropic-beta",
+                if self.use_bearer {
+                    "oauth-2025-04-20"
+                } else {
+                    ""
+                },
+            )
             .json(&body)
             .send()
             .await?;
