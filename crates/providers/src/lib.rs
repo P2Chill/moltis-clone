@@ -194,7 +194,9 @@ fn merge_discovered_with_fallback_catalog(
 
     let fallback_by_id: HashMap<String, DiscoveredModel> =
         fallback.into_iter().map(|m| (m.id.clone(), m)).collect();
-    discovered
+
+    // Apply fallback display names to discovered models.
+    let mut merged: Vec<DiscoveredModel> = discovered
         .into_iter()
         .map(|m| {
             let display_name = if m.display_name.trim().is_empty() {
@@ -211,7 +213,17 @@ fn merge_discovered_with_fallback_catalog(
                 created_at: m.created_at,
             }
         })
-        .collect()
+        .collect();
+
+    // Add static fallback models not returned by the live API.
+    let discovered_ids: HashSet<String> = merged.iter().map(|m| m.id.clone()).collect();
+    for fb in fallback_by_id.into_values() {
+        if !discovered_ids.contains(&fb.id) {
+            merged.push(fb);
+        }
+    }
+
+    merged
 }
 
 fn normalize_ollama_api_base_url(base_url: &str) -> String {
@@ -372,6 +384,24 @@ fn resolve_api_key(
         .or_else(|| env_value(env_overrides, env_key).map(secrecy::Secret::new))
         .filter(|s| !s.expose_secret().is_empty())
 }
+
+/// Read the Claude OAuth access token from the Claude Code credentials file.
+/// Enables using a Claude.ai subscription (Bearer auth) instead of an API key.
+fn read_claude_oauth_token() -> Option<secrecy::Secret<String>> {
+    let home = std::env::var("HOME").ok()?;
+    let path = std::path::Path::new(&home)
+        .join(".claude")
+        .join(".credentials.json");
+    let content = std::fs::read_to_string(&path).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&content).ok()?;
+    let token = json["claudeAiOauth"]["accessToken"].as_str()?.to_string();
+    if token.is_empty() {
+        return None;
+    }
+    tracing::debug!("Using Claude OAuth token from ~/.claude/.credentials.json");
+    Some(secrecy::Secret::new(token))
+}
+
 
 /// Return the known context window size (in tokens) for a model ID.
 /// Falls back to 200,000 for unknown models.
@@ -547,6 +577,8 @@ pub struct ModelInfo {
 /// Known Anthropic Claude models (model_id, display_name).
 /// Current models listed first, then legacy models.
 const ANTHROPIC_MODELS: &[(&str, &str)] = &[
+    ("claude-opus-4-6", "Claude Opus 4.6"),
+    ("claude-sonnet-4-6", "Claude Sonnet 4.6"),
     ("claude-opus-4-5-20251101", "Claude Opus 4.5"),
     ("claude-sonnet-4-5-20250929", "Claude Sonnet 4.5"),
     ("claude-haiku-4-5-20251001", "Claude Haiku 4.5"),
@@ -1379,10 +1411,12 @@ impl ProviderRegistry {
         config: &ProvidersConfig,
         env_overrides: &HashMap<String, String>,
     ) {
-        // Anthropic — register all known Claude models when API key is available.
+        // Anthropic — register all known Claude models when API key or OAuth token is available.
+        let anthropic_oauth_token = read_claude_oauth_token();
+        let anthropic_api_key = resolve_api_key(config, "anthropic", "ANTHROPIC_API_KEY", env_overrides);
+        let anthropic_use_bearer = anthropic_api_key.is_none() && anthropic_oauth_token.is_some();
         if config.is_enabled("anthropic")
-            && let Some(key) =
-                resolve_api_key(config, "anthropic", "ANTHROPIC_API_KEY", env_overrides)
+            && let Some(key) = anthropic_api_key.or(anthropic_oauth_token)
         {
             let base_url = config
                 .get("anthropic")
@@ -1410,12 +1444,22 @@ impl ProviderRegistry {
                 if self.has_provider_model(&provider_label, &model_id) {
                     continue;
                 }
-                let provider = Arc::new(anthropic::AnthropicProvider::with_alias(
-                    key.clone(),
-                    model_id.clone(),
-                    base_url.clone(),
-                    alias.clone(),
-                ));
+                let provider: Arc<dyn LlmProvider + Send + Sync> =
+                    if anthropic_use_bearer {
+                        Arc::new(anthropic::AnthropicProvider::with_alias_bearer(
+                            key.clone(),
+                            model_id.clone(),
+                            base_url.clone(),
+                            alias.clone(),
+                        ))
+                    } else {
+                        Arc::new(anthropic::AnthropicProvider::with_alias(
+                            key.clone(),
+                            model_id.clone(),
+                            base_url.clone(),
+                            alias.clone(),
+                        ))
+                    };
                 self.register(
                     ModelInfo {
                         id: model_id,

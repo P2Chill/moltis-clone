@@ -84,11 +84,16 @@ function fetchProviders() {
 
 			var models = [];
 			if (modelsRes?.ok) {
-				models = (modelsRes.payload || []).map((m) => ({
-					...m,
-					providerDisplayName: providerMeta.get(m.provider)?.displayName || m.provider,
-					authType: providerMeta.get(m.provider)?.authType || "api-key",
-				}));
+				models = (modelsRes.payload || []).map((m) => {
+					// Show openai-codex models under the openai provider tab
+					var displayProvider = m.provider === "openai-codex" ? "openai" : m.provider;
+					return {
+						...m,
+						provider: displayProvider,
+						providerDisplayName: providerMeta.get(displayProvider)?.displayName || displayProvider,
+						authType: providerMeta.get(displayProvider)?.authType || "api-key",
+					};
+				});
 			}
 
 			// Include configured providers that don't currently expose a model.

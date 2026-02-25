@@ -548,8 +548,10 @@ fn load_access_token_and_account_id() -> anyhow::Result<(String, String)> {
 pub fn live_models() -> anyhow::Result<Vec<super::DiscoveredModel>> {
     let (access_token, account_id) = load_access_token_and_account_id()?;
     let models = fetch_models_blocking(access_token, account_id)?;
+    let model_ids: Vec<&str> = models.iter().map(|m| m.id.as_str()).collect();
     info!(
         model_count = models.len(),
+        model_ids = ?model_ids,
         "loaded openai-codex live models"
     );
     Ok(models)
