@@ -69,6 +69,18 @@ pub fn patch_schema_for_strict_mode(schema: &mut serde_json::Value) {
         return;
     };
 
+    // If schema has no type, infer one (OpenAI strict mode requires type on every property schema)
+    if !obj.contains_key("type") && !obj.contains_key("anyOf") && !obj.contains_key("oneOf") && !obj.contains_key("allOf") {
+        let inferred = if obj.contains_key("properties") {
+            "object"
+        } else if obj.contains_key("items") {
+            "array"
+        } else {
+            "string"
+        };
+        obj.insert("type".to_string(), serde_json::json!(inferred));
+    }
+
     // If this is an object type, apply strict mode requirements
     if obj.get("type").and_then(|t| t.as_str()) == Some("object") {
         // Add additionalProperties: false
