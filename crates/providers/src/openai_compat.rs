@@ -94,6 +94,11 @@ pub fn patch_schema_for_strict_mode(schema: &mut serde_json::Value) {
         }
     }
 
+    // If this is an array type, ensure items is present (OpenAI strict mode requires it)
+    if obj.get("type").and_then(|t| t.as_str()) == Some("array") && !obj.contains_key("items") {
+        obj.insert("items".to_string(), serde_json::json!({}));
+    }
+
     // Recurse into array items
     if let Some(items) = obj.get_mut("items") {
         patch_schema_for_strict_mode(items);
