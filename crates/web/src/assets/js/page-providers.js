@@ -85,13 +85,17 @@ function fetchProviders() {
 			var models = [];
 			if (modelsRes?.ok) {
 				models = (modelsRes.payload || []).map((m) => {
-					// Show openai-codex models under the openai provider tab
+					// Show openai-codex models under the openai provider tab,
+					// but preserve its OAuth authType so the badge shows correctly.
 					var displayProvider = m.provider === "openai-codex" ? "openai" : m.provider;
+					var effectiveAuthType = m.provider === "openai-codex"
+						? (providerMeta.get("openai-codex")?.authType || "oauth")
+						: (providerMeta.get(m.provider)?.authType || "api-key");
 					return {
 						...m,
 						provider: displayProvider,
 						providerDisplayName: providerMeta.get(displayProvider)?.displayName || displayProvider,
-						authType: providerMeta.get(displayProvider)?.authType || "api-key",
+						authType: effectiveAuthType,
 					};
 				});
 			}
