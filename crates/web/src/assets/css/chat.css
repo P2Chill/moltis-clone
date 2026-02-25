@@ -703,19 +703,36 @@
 
 /* ── Avatar styles ─────────────────────────────────────── */
 #messages .msg.assistant:not(.thinking):not(.session-loading) {
-  padding-left: 44px;
+  margin-left: 44px;
   position: relative;
 }
 
 #messages .msg.assistant:not(.thinking):not(.session-loading)::before {
   content: '';
   position: absolute;
-  left: 0;
-  top: 2px;
+  left: -44px;
+  bottom: 4px;
   width: 32px;
   height: 32px;
   border-radius: 50%;
-  background: url('/assets/icons/sparky_avatar.png') center/cover no-repeat;
+  background: var(--avatar-agent-url, url('/api/avatar/agent')) center/cover no-repeat;
+}
+
+/* User avatar (only active when body.has-user-avatar is set by JS) */
+body.has-user-avatar #messages .msg.user:not(.session-loading) {
+  margin-right: 44px;
+  position: relative;
+}
+
+body.has-user-avatar #messages .msg.user:not(.session-loading)::after {
+  content: '';
+  position: absolute;
+  right: -44px;
+  bottom: 4px;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--avatar-user-url) center/cover no-repeat;
 }
 
 .agent-avatar-header {
@@ -723,6 +740,7 @@
   height: 28px;
   border-radius: 50%;
   object-fit: cover;
+  flex-shrink: 0;
 }
 
 .agent-avatar-header {

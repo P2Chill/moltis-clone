@@ -271,6 +271,10 @@ function IdentitySection() {
 	var [theme, setTheme] = useState(id?.theme || "");
 	var [userName, setUserName] = useState(id?.user_name || "");
 	var [soul, setSoul] = useState(id?.soul || "");
+	var [agentAvatarUrl, setAgentAvatarUrl] = useState(`/api/avatar/agent?v=${Date.now()}`);
+	var [userAvatarUrl, setUserAvatarUrl] = useState(null);
+	var [avatarUploading, setAvatarUploading] = useState(null); // "agent" | "user" | null
+	var [avatarError, setAvatarError] = useState(null);
 	var [saving, setSaving] = useState(false);
 	var [emojiSaving, setEmojiSaving] = useState(false);
 	var [nameSaving, setNameSaving] = useState(false);
@@ -278,6 +282,13 @@ function IdentitySection() {
 	var [saved, setSaved] = useState(false);
 	var [showFaviconReloadHint, setShowFaviconReloadHint] = useState(false);
 	var [error, setError] = useState(null);
+
+	// Probe whether a user avatar has been uploaded.
+	useEffect(() => {
+		fetch("/api/avatar/user", { method: "HEAD" })
+			.then((r) => { if (r.ok) setUserAvatarUrl(`/api/avatar/user?v=${Date.now()}`); })
+			.catch(() => {});
+	}, []);
 
 	// Sync state when identity loads asynchronously
 	useEffect(() => {
@@ -301,6 +312,71 @@ function IdentitySection() {
 		return html`<div class="flex-1 flex flex-col min-w-0 p-4 gap-4 overflow-y-auto">
 			<div class="text-xs text-[var(--muted)]">Loading\u2026</div>
 		</div>`;
+	}
+
+	function uploadAvatar(type) {
+		var input = document.createElement("input");
+		input.type = "file";
+		input.accept = "image/png,image/jpeg,image/webp,image/gif";
+		input.onchange = () => {
+			var file = input.files?.[0];
+			if (!file) return;
+			setAvatarUploading(type);
+			setAvatarError(null);
+			rerender();
+			fetch(`/api/avatar/${type}`, {
+				method: "POST",
+				headers: { "Content-Type": file.type },
+				body: file,
+			})
+				.then((r) => r.json())
+				.then((d) => {
+					setAvatarUploading(null);
+					if (d.ok) {
+						var ts = Date.now();
+						var url = `/api/avatar/${type}?v=${ts}`;
+						if (type === "agent") {
+							setAgentAvatarUrl(url);
+							// Live-update header img and CSS variable.
+							var hdr = document.getElementById("agentAvatar");
+							if (hdr) hdr.src = url;
+							document.documentElement.style.setProperty("--avatar-agent-url", `url('${url}')`);
+						} else {
+							setUserAvatarUrl(url);
+							document.documentElement.style.setProperty("--avatar-user-url", `url('${url}')`);
+							document.body.classList.add("has-user-avatar");
+						}
+					} else {
+						setAvatarError(d.error || "Upload failed");
+					}
+					rerender();
+				})
+				.catch((e) => {
+					setAvatarUploading(null);
+					setAvatarError(e.message || "Upload failed");
+					rerender();
+				});
+		};
+		input.click();
+	}
+
+	function removeAvatar(type) {
+		fetch(`/api/avatar/${type}`, { method: "DELETE" })
+			.then(() => {
+				if (type === "agent") {
+					var url = `/api/avatar/agent?v=${Date.now()}`;
+					setAgentAvatarUrl(url);
+					var hdr = document.getElementById("agentAvatar");
+					if (hdr) hdr.src = url;
+					document.documentElement.style.setProperty("--avatar-agent-url", `url('${url}')`);
+				} else {
+					setUserAvatarUrl(null);
+					document.documentElement.style.removeProperty("--avatar-user-url");
+					document.body.classList.remove("has-user-avatar");
+				}
+				rerender();
+			})
+			.catch(() => {});
 	}
 
 	function onSave(e) {
@@ -449,6 +525,19 @@ function IdentitySection() {
 							placeholder="e.g. wise owl, chill fox" />
 					</div>
 					</div>
+					<!-- Agent avatar -->
+					<div style="grid-column:1/-1;margin-top:4px;">
+						<div class="text-xs text-[var(--muted)]" style="margin-bottom:6px;">Avatar</div>
+						<div style="display:flex;align-items:center;gap:12px;">
+							<img src=${agentAvatarUrl} style="width:48px;height:48px;border-radius:50%;object-fit:cover;border:1px solid var(--border);background:var(--surface2);" alt="agent avatar" />
+							<div style="display:flex;flex-direction:column;gap:4px;">
+								<button type="button" class="provider-btn" style="font-size:.75rem;" onClick=${() => uploadAvatar("agent")} disabled=${avatarUploading === "agent"}>
+									${avatarUploading === "agent" ? "Uploading\u2026" : "Upload image"}
+								</button>
+								<button type="button" class="provider-btn" style="font-size:.75rem;opacity:.7;" onClick=${() => removeAvatar("agent")}>Reset to default</button>
+							</div>
+						</div>
+					</div>
 					${
 						showFaviconReloadHint
 							? html`<div class="mt-3 rounded border border-[var(--border)] bg-[var(--surface2)] p-2 text-xs text-[var(--muted)]">
@@ -467,6 +556,22 @@ function IdentitySection() {
 						<input type="text" class="provider-key-input" style="width:100%;max-width:280px;"
 							value=${userName} onInput=${(e) => setUserName(e.target.value)} onBlur=${onUserNameBlur}
 							placeholder="e.g. Alice" />
+					</div>
+				</div>
+				<!-- User avatar -->
+				<div style="margin-top:12px;">
+					<div class="text-xs text-[var(--muted)]" style="margin-bottom:6px;">Your avatar</div>
+					<div style="display:flex;align-items:center;gap:12px;">
+						${userAvatarUrl
+							? html`<img src=${userAvatarUrl} style="width:48px;height:48px;border-radius:50%;object-fit:cover;border:1px solid var(--border);background:var(--surface2);" alt="user avatar" />`
+							: html`<div style="width:48px;height:48px;border-radius:50%;border:1px dashed var(--border);background:var(--surface2);display:flex;align-items:center;justify-content:center;"><span class="text-xs text-[var(--muted)]">none</span></div>`
+						}
+						<div style="display:flex;flex-direction:column;gap:4px;">
+							<button type="button" class="provider-btn" style="font-size:.75rem;" onClick=${() => uploadAvatar("user")} disabled=${avatarUploading === "user"}>
+								${avatarUploading === "user" ? "Uploading\u2026" : "Upload image"}
+							</button>
+							${userAvatarUrl ? html`<button type="button" class="provider-btn" style="font-size:.75rem;opacity:.7;" onClick=${() => removeAvatar("user")}>Remove</button>` : null}
+						</div>
 					</div>
 				</div>
 
@@ -3392,7 +3497,7 @@ function PageSection({ initFn, teardownFn }) {
 	}, []);
 	return html`<div
 		ref=${ref}
-		class="flex-1 flex flex-col min-w-0 overflow-hidden"
+		class="flex-1 flex flex-col min-w-0 overflow-y-auto"
 	/>`;
 }
 
