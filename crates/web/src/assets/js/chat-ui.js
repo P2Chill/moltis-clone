@@ -47,11 +47,7 @@ export function chatAddMsg(cls, content, isHtml) {
 	} else {
 		el.textContent = content;
 	}
-	if (cls === "assistant") {
-		appendAssistantEl(el);
-	} else {
-		S.chatMsgBox.appendChild(el);
-	}
+	S.chatMsgBox.appendChild(el);
 	if (!S.chatBatchLoading) S.chatMsgBox.scrollTop = S.chatMsgBox.scrollHeight;
 	return el;
 }
