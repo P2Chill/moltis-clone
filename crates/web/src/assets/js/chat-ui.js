@@ -35,19 +35,7 @@ export function chatAddMsg(cls, content, isHtml) {
 	} else {
 		el.textContent = content;
 	}
-	if (cls === "assistant") {
-		var row = document.createElement("div");
-		row.className = "msg-row";
-		var avatar = document.createElement("img");
-		avatar.className = "msg-avatar";
-		avatar.src = "/assets/icons/sparky_avatar.png";
-		avatar.alt = "";
-		row.appendChild(avatar);
-		row.appendChild(el);
-		S.chatMsgBox.appendChild(row);
-	} else {
-		S.chatMsgBox.appendChild(el);
-	}
+	S.chatMsgBox.appendChild(el);
 	if (!S.chatBatchLoading) S.chatMsgBox.scrollTop = S.chatMsgBox.scrollHeight;
 	return el;
 }
