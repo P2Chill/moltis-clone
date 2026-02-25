@@ -19,6 +19,18 @@ export function scrollChatToBottom() {
 	}, 500);
 }
 
+export function appendAssistantEl(el) {
+	var row = document.createElement("div");
+	row.className = "msg-row";
+	var avatar = document.createElement("img");
+	avatar.className = "msg-avatar";
+	avatar.src = "/assets/icons/sparky_avatar.png";
+	avatar.alt = "";
+	row.appendChild(avatar);
+	row.appendChild(el);
+	S.chatMsgBox.appendChild(row);
+}
+
 export function chatAddMsg(cls, content, isHtml) {
 	if (!S.chatMsgBox) return null;
 	var welcome = document.getElementById("welcomeCard");
@@ -36,15 +48,7 @@ export function chatAddMsg(cls, content, isHtml) {
 		el.textContent = content;
 	}
 	if (cls === "assistant") {
-		var row = document.createElement("div");
-		row.className = "msg-row";
-		var avatar = document.createElement("img");
-		avatar.className = "msg-avatar";
-		avatar.src = "/assets/icons/sparky_avatar.png";
-		avatar.alt = "";
-		row.appendChild(avatar);
-		row.appendChild(el);
-		S.chatMsgBox.appendChild(row);
+		appendAssistantEl(el);
 	} else {
 		S.chatMsgBox.appendChild(el);
 	}

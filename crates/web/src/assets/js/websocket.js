@@ -1,6 +1,7 @@
 // ── WebSocket ─────────────────────────────────────────────────
 
 import {
+	appendAssistantEl,
 	appendChannelFooter,
 	appendReasoningDisclosure,
 	chatAddErrorCard,
@@ -433,7 +434,7 @@ function handleChatDelta(p, isActive, isChatPage, eventSession) {
 		S.setStreamText("");
 		S.setStreamEl(document.createElement("div"));
 		S.streamEl.className = "msg assistant";
-		S.chatMsgBox.appendChild(S.streamEl);
+		appendAssistantEl(S.streamEl);
 	}
 	S.setStreamText(S.streamText + p.text);
 	setSafeMarkdownHtml(S.streamEl, S.streamText);
@@ -577,7 +578,7 @@ function handleChatFinal(p, isActive, isChatPage, eventSession) {
 		var msgEl = S.streamEl || document.createElement("div");
 		msgEl.className = "msg assistant";
 		msgEl.textContent = "";
-		if (!msgEl.parentNode) S.chatMsgBox.appendChild(msgEl);
+		if (!msgEl.parentNode) appendAssistantEl(msgEl);
 
 		if (p.audio) {
 			var filename = p.audio.split("/").pop();
