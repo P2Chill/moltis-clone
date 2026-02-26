@@ -10,3 +10,5 @@ prompts
 features/
 .moltis/
 docs/book/
+node_modules/
+package-lock.json
