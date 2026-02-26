@@ -79,7 +79,7 @@ function buildModelItem(m, currentId) {
 	if (m.provider) {
 		var prov = document.createElement("span");
 		prov.className = "model-item-provider";
-		prov.textContent = m.provider === "openai-codex" ? "openai" : m.provider;
+		prov.textContent = m.provider.replace(/^custom-/, "");
 		meta.appendChild(prov);
 	}
 
