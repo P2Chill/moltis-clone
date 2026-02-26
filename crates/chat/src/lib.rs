@@ -1264,6 +1264,7 @@ fn apply_runtime_tool_filters(
     config: &moltis_config::MoltisConfig,
     _skills: &[moltis_skills::types::SkillMetadata],
     mcp_disabled: bool,
+    model_id: Option<&str>,
 ) -> ToolRegistry {
     let base_registry = if mcp_disabled {
         base.clone_without_mcp()
@@ -1271,12 +1272,20 @@ fn apply_runtime_tool_filters(
         base.clone_without(&[])
     };
 
-    let policy = effective_tool_policy(config);
-    // NOTE: Do not globally restrict tools by discovered skill `allowed_tools`.
-    // Skills are always discovered for prompt injection; applying those lists at
-    // runtime can unintentionally remove unrelated tools (for example, leaving
-    // only `web_fetch` and preventing `create_skill` from being called).
-    // Tool availability here is controlled by configured runtime policy.
+    let mut policy = effective_tool_policy(config);
+    if let Some(mid) = model_id {
+        let mid_lower = mid.to_lowercase();
+        for (key, override_policy) in &config.tools.model_overrides {
+            if mid_lower.contains(&key.to_lowercase()) {
+                let override_tp = ToolPolicy {
+                    allow: override_policy.allow.clone(),
+                    deny: override_policy.deny.clone(),
+                };
+                policy = policy.merge_with(&override_tp);
+                break;
+            }
+        }
+    }
     base_registry.clone_allowed_by(|name| policy.is_allowed(name))
 }
 
@@ -4093,7 +4102,7 @@ impl ChatService for LiveChatService {
         let tools: Vec<Value> = if supports_tools {
             let registry_guard = self.tool_registry.read().await;
             let effective_registry =
-                apply_runtime_tool_filters(&registry_guard, &config, &[], mcp_disabled);
+                apply_runtime_tool_filters(&registry_guard, &config, &[], mcp_disabled, None);
             effective_registry
                 .list_schemas()
                 .iter()
@@ -4315,6 +4324,7 @@ impl ChatService for LiveChatService {
                     &persona.config,
                     &discovered_skills,
                     mcp_disabled,
+                    None,
                 )
             } else {
                 registry_guard.clone_without(&[])
@@ -4433,6 +4443,7 @@ impl ChatService for LiveChatService {
                     &persona.config,
                     &discovered_skills,
                     mcp_disabled,
+                    None,
                 )
             } else {
                 registry_guard.clone_without(&[])
@@ -5043,7 +5054,7 @@ async fn run_with_tools(
     let filtered_registry = {
         let registry_guard = tool_registry.read().await;
         if native_tools {
-            apply_runtime_tool_filters(&registry_guard, &persona.config, skills, mcp_disabled)
+            apply_runtime_tool_filters(&registry_guard, &persona.config, skills, mcp_disabled, Some(model_id))
         } else {
             registry_guard.clone_without(&[])
         }
@@ -8597,7 +8608,7 @@ mod tests {
             source: None,
         }];
 
-        let filtered = apply_runtime_tool_filters(&registry, &cfg, &skills, false);
+        let filtered = apply_runtime_tool_filters(&registry, &cfg, &skills, false, None);
         assert!(filtered.get("exec").is_some());
         assert!(filtered.get("web_fetch").is_some());
         assert!(filtered.get("create_skill").is_some());
@@ -8630,7 +8641,7 @@ mod tests {
             source: None,
         }];
 
-        let filtered = apply_runtime_tool_filters(&registry, &cfg, &skills, false);
+        let filtered = apply_runtime_tool_filters(&registry, &cfg, &skills, false, None);
         assert!(filtered.get("create_skill").is_some());
         assert!(filtered.get("web_fetch").is_some());
     }

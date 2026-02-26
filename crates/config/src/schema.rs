@@ -1097,6 +1097,11 @@ pub enum MessageQueueMode {
 pub struct ToolsConfig {
     pub exec: ExecConfig,
     pub policy: ToolPolicyConfig,
+    /// Per-model tool policy overrides. Keys are matched as substrings against
+    /// the raw model ID (e.g. "haiku", "claude-haiku-4-5-20251001").
+    /// The matched policy is merged on top of the global policy.
+    #[serde(default)]
+    pub model_overrides: HashMap<String, ToolPolicyConfig>,
     pub web: WebConfig,
     pub maps: MapsConfig,
     pub browser: BrowserConfig,
@@ -1116,6 +1121,7 @@ impl Default for ToolsConfig {
         Self {
             exec: ExecConfig::default(),
             policy: ToolPolicyConfig::default(),
+            model_overrides: HashMap::new(),
             web: WebConfig::default(),
             maps: MapsConfig::default(),
             browser: BrowserConfig::default(),
