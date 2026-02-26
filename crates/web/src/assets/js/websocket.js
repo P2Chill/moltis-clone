@@ -197,7 +197,7 @@ function handleChatToolCallStart(p, isActive, isChatPage, eventSession) {
 		// Remove the element if it's empty (e.g. only whitespace from a
 		// pre-tool-call delta) to avoid leaving an orphaned empty div.
 		if (!S.streamEl.textContent.trim()) {
-			S.streamEl.remove();
+			removeStreamEl();
 		}
 		S.setStreamEl(null);
 		S.setStreamText("");
@@ -410,6 +410,17 @@ function hasNonWhitespaceContent(text) {
 	return String(text || "").trim().length > 0;
 }
 
+// Remove the stream element and its .msg-row wrapper (if any).
+function removeStreamEl() {
+	if (!S.streamEl) return;
+	var parent = S.streamEl.parentNode;
+	if (parent && parent.classList && parent.classList.contains("msg-row")) {
+		parent.remove();
+	} else {
+		S.streamEl.remove();
+	}
+}
+
 function handleChatDelta(p, isActive, isChatPage, eventSession) {
 	updateSessionRunId(eventSession, p.runId);
 	if (!p.text) return;
@@ -467,10 +478,10 @@ function resolveFinalMessageEl(p) {
 		}
 		if (hasFinalText) return chatAddMsg("assistant", renderMarkdown(finalText), true);
 		// No text (silent reply) — remove any leftover stream element.
-		if (S.streamEl) S.streamEl.remove();
+		if (S.streamEl) removeStreamEl();
 		return null;
 	}
-	if (S.streamEl) S.streamEl.remove();
+	if (S.streamEl) removeStreamEl();
 	return null;
 }
 
