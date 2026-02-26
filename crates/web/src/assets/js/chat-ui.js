@@ -20,15 +20,7 @@ export function scrollChatToBottom() {
 }
 
 export function appendAssistantEl(el) {
-	var row = document.createElement("div");
-	row.className = "msg-row";
-	var avatar = document.createElement("img");
-	avatar.className = "msg-avatar";
-	avatar.src = "/assets/icons/sparky_avatar.png";
-	avatar.alt = "";
-	row.appendChild(avatar);
-	row.appendChild(el);
-	S.chatMsgBox.appendChild(row);
+	S.chatMsgBox.appendChild(el);
 }
 
 export function chatAddMsg(cls, content, isHtml) {
