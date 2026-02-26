@@ -79,7 +79,9 @@ function buildModelItem(m, currentId) {
 	if (m.provider) {
 		var prov = document.createElement("span");
 		prov.className = "model-item-provider";
-		prov.textContent = m.provider.replace(/^custom-/, "");
+		var provName = m.provider.replace(/^custom-/, "");
+		var provAliases = { "generativelanguage-googleapis-com": "Google" };
+		prov.textContent = provAliases[provName] || provName;
 		meta.appendChild(prov);
 	}
 
