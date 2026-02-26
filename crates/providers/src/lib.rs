@@ -1439,8 +1439,9 @@ impl ProviderRegistry {
             let models = merge_preferred_and_discovered_models(preferred, discovered);
 
             for model in models {
-                let (model_id, display_name, created_at) =
-                    (model.id, model.display_name, model.created_at);
+                let model_id = model.id.strip_prefix("models/").map(str::to_string).unwrap_or(model.id);
+                let (display_name, created_at) =
+                    (model.display_name, model.created_at);
                 if self.has_provider_model(&provider_label, &model_id) {
                     continue;
                 }
@@ -1493,8 +1494,9 @@ impl ProviderRegistry {
             let models = merge_preferred_and_discovered_models(preferred, discovered);
 
             for model in models {
-                let (model_id, display_name, created_at) =
-                    (model.id, model.display_name, model.created_at);
+                let model_id = model.id.strip_prefix("models/").map(str::to_string).unwrap_or(model.id);
+                let (display_name, created_at) =
+                    (model.display_name, model.created_at);
                 if self.has_provider_model(&provider_label, &model_id) {
                     continue;
                 }
@@ -1615,8 +1617,9 @@ impl ProviderRegistry {
                 };
             let models = merge_preferred_and_discovered_models(preferred, discovered);
             for model in models {
-                let (model_id, display_name, created_at) =
-                    (model.id, model.display_name, model.created_at);
+                let model_id = model.id.strip_prefix("models/").map(str::to_string).unwrap_or(model.id);
+                let (display_name, created_at) =
+                    (model.display_name, model.created_at);
                 if self.has_provider_model(&provider_label, &model_id) {
                     continue;
                 }
@@ -1688,8 +1691,9 @@ impl ProviderRegistry {
             }
 
             for model in models {
-                let (model_id, display_name, created_at) =
-                    (model.id, model.display_name, model.created_at);
+                let model_id = model.id.strip_prefix("models/").map(str::to_string).unwrap_or(model.id);
+                let (display_name, created_at) =
+                    (model.display_name, model.created_at);
                 if self.has_provider_model(name, &model_id) {
                     continue;
                 }
