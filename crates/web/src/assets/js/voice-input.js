@@ -42,6 +42,7 @@ var VAD_SPEECH_THRESHOLD = 0.015; // RMS threshold — speech above this
 var VAD_SILENCE_DURATION = 1500; // ms of silence before auto-send
 var VAD_DEBOUNCE_SPEECH = 150; // ms of speech before we start recording
 var vadSpeechStart = 0;
+var vadRecordingStart = 0;
 
 /** Check if voice feature is enabled. */
 function isVoiceEnabled() {
@@ -391,9 +392,13 @@ function onMicClick(e) {
 function onPttKeyDown(e) {
 	if (e.key !== pttKey) return;
 	if (vadActive || pttActive || isRecording) return;
-	// Don't trigger PTT when typing in an input/textarea
-	var tag = document.activeElement?.tagName;
-	if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+	// Allow function keys (F1-F24) even in inputs — dedicated hardware keys.
+	// Block regular character keys when typing in an input/textarea.
+	var isFunctionKey = /^F[0-9]{1,2}$/.test(e.key);
+	if (!isFunctionKey) {
+		var tag = document.activeElement?.tagName;
+		if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+	}
 
 	e.preventDefault();
 	pttActive = true;
@@ -526,9 +531,30 @@ function vadMonitorLoop() {
 	var rms = getRMS(vadAnalyser, vadDataArray);
 	var now = Date.now();
 
+	// Debug: log RMS every ~1s
+	if (!vadMonitorLoop._lastLog || now - vadMonitorLoop._lastLog > 1000) {
+		vadMonitorLoop._lastLog = now;
+		console.debug("[voice] VAD rms:", rms.toFixed(4), "speech:", vadSpeechDetected, "recording:", isRecording, "muted:", vadMutedForTts);
+	}
+
 	if (rms > VAD_SPEECH_THRESHOLD) {
 		// Speech detected
 		vadSilenceStart = 0;
+
+		// Safety valve: auto-stop after 30s of continuous recording
+		if (vadSpeechDetected && isRecording && vadRecordingStart && (now - vadRecordingStart > 30000)) {
+			console.debug("[voice] VAD: max recording duration reached, auto-stopping");
+			vadSpeechDetected = false;
+			vadSilenceStart = 0;
+			vadRecordingStart = 0;
+			if (vadBtn) vadBtn.classList.remove("vad-speech", "vad-listening");
+			if (isRecording && mediaRecorder && mediaRecorder.state === "recording") {
+				isRecording = false;
+				mediaRecorder.stop();
+			}
+			vadRafId = requestAnimationFrame(vadMonitorLoop);
+			return;
+		}
 
 		if (!(vadSpeechDetected || isRecording)) {
 			// Debounce: require speech for VAD_DEBOUNCE_SPEECH ms before starting
@@ -538,6 +564,7 @@ function vadMonitorLoop() {
 				vadSpeechDetected = true;
 				vadSpeechStart = 0;
 				console.debug("[voice] VAD: speech detected, starting recording");
+				vadRecordingStart = now;
 				stopAllAudio(); // stop any playing TTS
 				startRecording({ fromVad: true, stream: vadStream });
 			}
@@ -546,19 +573,28 @@ function vadMonitorLoop() {
 		// Silence
 		vadSpeechStart = 0;
 
-		if (vadSpeechDetected && isRecording) {
+		if (vadSpeechDetected) {
 			if (!vadSilenceStart) {
 				vadSilenceStart = now;
 			} else if (now - vadSilenceStart >= VAD_SILENCE_DURATION) {
 				// Enough silence — stop recording and send
-				console.debug("[voice] VAD: silence detected, stopping recording");
+				console.debug("[voice] VAD: silence detected, stopping recording. isRecording:", isRecording);
+				vadRecordingStart = 0;
 				vadSpeechDetected = false;
 				vadSilenceStart = 0;
 				if (vadBtn) {
 					vadBtn.classList.remove("vad-speech", "vad-listening");
 				}
-				isRecording = false;
-				mediaRecorder.stop();
+				if (isRecording && mediaRecorder && mediaRecorder.state === "recording") {
+					isRecording = false;
+					mediaRecorder.stop();
+				} else {
+					// Recording never fully started — clean up
+					isRecording = false;
+					isStarting = false;
+					audioChunks = [];
+					cleanupTranscribingState();
+				}
 				// mediaRecorder.onstop will call transcribeAudio
 			}
 		}
@@ -585,10 +621,10 @@ function onTtsEnded(e) {
 	vadSpeechDetected = false;
 	vadSilenceStart = 0;
 	vadSpeechStart = 0;
-	// Small delay before re-listening to avoid catching tail-end of TTS
+	// Brief delay before re-listening
 	setTimeout(() => {
 		if (vadActive && !vadMutedForTts && vadBtn) vadBtn.classList.add("vad-listening");
-	}, 300);
+	}, 50);
 }
 
 function onTtsPause(e) {
