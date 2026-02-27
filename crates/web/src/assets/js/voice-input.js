@@ -1,13 +1,22 @@
 // ── Voice input module ───────────────────────────────────────
 // Handles microphone recording and speech-to-text transcription.
+// Supports three input modes:
+//   1. Toggle (default): click mic to start, click again to stop & send
+//   2. Push-to-talk (PTT): hold a hotkey to record, release to send
+//   3. VAD (continuous): click waveform button to enter hands-free mode;
+//      auto-detects speech via energy-based VAD, auto-sends on silence,
+//      auto-re-listens after TTS playback finishes.
 
 import { chatAddMsg } from "./chat-ui.js";
 import * as gon from "./gon.js";
 import { renderAudioPlayer, renderMarkdown, sendRpc, warmAudioPlayback } from "./helpers.js";
 import { bumpSessionCount, seedSessionPreviewFromUserText, setSessionReplying } from "./sessions.js";
 import * as S from "./state.js";
+import { sessionStore } from "./stores/session-store.js";
 
+// ── Shared state ─────────────────────────────────────────────
 var micBtn = null;
+var vadBtn = null;
 var mediaRecorder = null;
 var audioChunks = [];
 var sttConfigured = false;
@@ -15,17 +24,36 @@ var isRecording = false;
 var isStarting = false;
 var transcribingEl = null;
 
+// ── PTT state ────────────────────────────────────────────────
+var pttKey = localStorage.getItem("moltis_ptt_key") || "F13";
+var pttActive = false; // true while PTT key is held
+
+// ── VAD state ────────────────────────────────────────────────
+var vadActive = false;
+var vadStream = null;
+var vadAudioCtx = null;
+var vadAnalyser = null;
+var vadDataArray = null;
+var vadRafId = null;
+var vadSpeechDetected = false;
+var vadSilenceStart = 0;
+var vadMutedForTts = false;
+var VAD_SPEECH_THRESHOLD = 0.015; // RMS threshold — speech above this
+var VAD_SILENCE_DURATION = 1500; // ms of silence before auto-send
+var VAD_DEBOUNCE_SPEECH = 150; // ms of speech before we start recording
+var vadSpeechStart = 0;
+
 /** Check if voice feature is enabled. */
 function isVoiceEnabled() {
 	return gon.get("voice_enabled") === true;
 }
 
-/** Check if STT is available and enable/disable mic button. */
+/** Check if STT is available and enable/disable buttons. */
 async function checkSttStatus() {
-	// If voice feature is disabled, always hide the button
 	if (!isVoiceEnabled()) {
 		sttConfigured = false;
 		updateMicButton();
+		updateVadButton();
 		return;
 	}
 	var res = await sendRpc("stt.status", {});
@@ -35,14 +63,14 @@ async function checkSttStatus() {
 		sttConfigured = false;
 	}
 	updateMicButton();
+	updateVadButton();
 }
 
-/** Update mic button visibility based on STT configuration. */
+// ── Mic button (toggle mode) ─────────────────────────────────
+
 function updateMicButton() {
 	if (!micBtn) return;
-	// Hide button when voice feature is disabled or STT is not configured
 	micBtn.style.display = sttConfigured && isVoiceEnabled() ? "" : "none";
-	// Disable only when not connected (button is only visible when STT configured)
 	micBtn.disabled = !S.connected;
 	micBtn.title = isStarting
 		? "Starting microphone..."
@@ -51,7 +79,17 @@ function updateMicButton() {
 			: "Click to start recording";
 }
 
-/** Pause all currently playing audio elements on the page. */
+// ── VAD button ───────────────────────────────────────────────
+
+function updateVadButton() {
+	if (!vadBtn) return;
+	vadBtn.style.display = sttConfigured && isVoiceEnabled() ? "" : "none";
+	vadBtn.disabled = !S.connected;
+	vadBtn.title = vadActive ? "Click to stop conversation mode" : "Conversation mode (VAD)";
+}
+
+// ── Audio helpers ────────────────────────────────────────────
+
 function stopAllAudio() {
 	for (var audio of document.querySelectorAll("audio")) {
 		if (!audio.paused) {
@@ -61,37 +99,56 @@ function stopAllAudio() {
 	}
 }
 
-/** Start recording audio from the microphone. */
-async function startRecording() {
+function getRMS(analyser, dataArray) {
+	analyser.getByteTimeDomainData(dataArray);
+	var sum = 0;
+	for (var sample of dataArray) {
+		var val = (sample - 128) / 128;
+		sum += val * val;
+	}
+	return Math.sqrt(sum / dataArray.length);
+}
+
+// ── Recording (shared by toggle + PTT + VAD) ─────────────────
+
+async function startRecording(opts) {
 	if (isRecording || isStarting || !sttConfigured) return;
 
-	// Stop any playing audio so the mic doesn't pick up speaker output.
-	stopAllAudio();
+	var fromVad = opts?.fromVad === true;
+	var stream = opts?.stream || null;
+
+	if (!fromVad) stopAllAudio();
 
 	isStarting = true;
-	micBtn.classList.add("starting");
-	micBtn.setAttribute("aria-busy", "true");
-	micBtn.title = "Starting microphone...";
+	if (micBtn && !fromVad) {
+		micBtn.classList.add("starting");
+		micBtn.setAttribute("aria-busy", "true");
+		micBtn.title = "Starting microphone...";
+	}
 
 	try {
-		var stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+		if (!stream) {
+			stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+		}
 		audioChunks = [];
 		var recordingUiShown = false;
 
 		function showRecordingUi() {
-			if (recordingUiShown || !micBtn) return;
+			if (recordingUiShown) return;
 			recordingUiShown = true;
 			isStarting = false;
-			micBtn.classList.remove("starting");
-			micBtn.removeAttribute("aria-busy");
-			micBtn.classList.add("recording");
-			micBtn.setAttribute("aria-pressed", "true");
-			micBtn.title = "Click to stop and send";
+			if (fromVad) {
+				if (vadBtn) vadBtn.classList.add("vad-speech");
+			} else if (micBtn) {
+				micBtn.classList.remove("starting");
+				micBtn.removeAttribute("aria-busy");
+				micBtn.classList.add("recording");
+				micBtn.setAttribute("aria-pressed", "true");
+				micBtn.title = "Click to stop and send";
+			}
 		}
 
-		// Use webm/opus if available, fall back to audio/webm
 		var mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : "audio/webm";
-
 		mediaRecorder = new MediaRecorder(stream, { mimeType });
 
 		mediaRecorder.ondataavailable = (e) => {
@@ -101,7 +158,6 @@ async function startRecording() {
 			}
 		};
 
-		// Recorder start means stop is now valid; visual indicator waits for actual audio data.
 		mediaRecorder.onstart = () => {
 			isRecording = true;
 		};
@@ -114,9 +170,14 @@ async function startRecording() {
 		}
 
 		mediaRecorder.onstop = async () => {
-			// Stop all tracks to release the microphone
-			for (var track of stream.getTracks()) {
-				track.stop();
+			// Only stop tracks if NOT in VAD mode (VAD keeps the stream open)
+			if (!fromVad) {
+				for (var track of stream.getTracks()) {
+					track.stop();
+				}
+			}
+			if (fromVad && vadBtn) {
+				vadBtn.classList.remove("vad-speech");
 			}
 			await transcribeAudio();
 		};
@@ -125,14 +186,13 @@ async function startRecording() {
 	} catch (err) {
 		isStarting = false;
 		isRecording = false;
-		if (micBtn) {
+		if (micBtn && !fromVad) {
 			micBtn.classList.remove("starting");
 			micBtn.removeAttribute("aria-busy");
 			micBtn.setAttribute("aria-pressed", "false");
 			micBtn.title = "Click to start recording";
 		}
 		console.error("Failed to start recording:", err);
-		// Show user-friendly error
 		if (err.name === "NotAllowedError") {
 			alert("Microphone permission denied. Please allow microphone access in your browser settings.");
 		} else if (err.name === "NotFoundError") {
@@ -141,62 +201,54 @@ async function startRecording() {
 	}
 }
 
-/** Stop recording and trigger transcription. */
 function stopRecording() {
 	if (!(isRecording && mediaRecorder)) return;
 
 	isStarting = false;
 	isRecording = false;
-	micBtn.classList.remove("starting");
-	micBtn.removeAttribute("aria-busy");
-	micBtn.classList.remove("recording");
-	micBtn.setAttribute("aria-pressed", "false");
-	micBtn.classList.add("transcribing");
-	micBtn.title = "Transcribing...";
-
-	// Stop the recorder, which triggers onstop -> transcribeAudio
+	if (micBtn) {
+		micBtn.classList.remove("starting");
+		micBtn.removeAttribute("aria-busy");
+		micBtn.classList.remove("recording");
+		micBtn.setAttribute("aria-pressed", "false");
+		micBtn.classList.add("transcribing");
+		micBtn.title = "Transcribing...";
+	}
 	mediaRecorder.stop();
 }
 
-/** Cancel recording without sending — discards audio chunks. */
 function cancelRecording() {
 	if (!(isRecording && mediaRecorder)) return;
-
 	console.debug("[voice] recording cancelled via Escape");
-
-	// Prevent onstop from transcribing by clearing chunks first.
 	audioChunks = [];
-
 	isStarting = false;
 	isRecording = false;
-	micBtn.classList.remove("starting", "recording");
-	micBtn.removeAttribute("aria-busy");
-	micBtn.setAttribute("aria-pressed", "false");
-	micBtn.title = "Click to start recording";
-
-	// Stop the recorder — onstop will see empty chunks and bail out.
+	if (micBtn) {
+		micBtn.classList.remove("starting", "recording");
+		micBtn.removeAttribute("aria-busy");
+		micBtn.setAttribute("aria-pressed", "false");
+		micBtn.title = "Click to start recording";
+	}
+	if (vadBtn) vadBtn.classList.remove("vad-speech");
 	mediaRecorder.stop();
 }
 
-/** Create transcribing indicator element. */
+// ── Transcription UI helpers ─────────────────────────────────
+
 function createTranscribingIndicator(message, isError) {
 	var el = document.createElement("div");
 	el.className = "msg voice-transcribing";
-
 	var spinner = document.createElement("span");
 	spinner.className = "voice-transcribing-spinner";
-
 	var text = document.createElement("span");
 	text.className = "voice-transcribing-text";
 	if (isError) text.classList.add("text-[var(--error)]");
 	text.textContent = message;
-
 	if (!isError) el.appendChild(spinner);
 	el.appendChild(text);
 	return el;
 }
 
-/** Update transcribing element with a message. */
 function updateTranscribingMessage(message, isError) {
 	if (!transcribingEl) return;
 	transcribingEl.textContent = "";
@@ -207,7 +259,6 @@ function updateTranscribingMessage(message, isError) {
 	transcribingEl.appendChild(text);
 }
 
-/** Show a temporary message then remove the transcribing element. */
 function showTemporaryMessage(message, isError, delayMs) {
 	updateTranscribingMessage(message, isError);
 	setTimeout(() => {
@@ -218,26 +269,25 @@ function showTemporaryMessage(message, isError, delayMs) {
 	}, delayMs);
 }
 
-/** Remove transcribing indicator and reset mic button state. */
 function cleanupTranscribingState() {
 	isStarting = false;
-	micBtn.classList.remove("starting");
-	micBtn.removeAttribute("aria-busy");
-	micBtn.classList.remove("transcribing");
-	micBtn.title = "Click to start recording";
+	if (micBtn) {
+		micBtn.classList.remove("starting");
+		micBtn.removeAttribute("aria-busy");
+		micBtn.classList.remove("transcribing");
+		micBtn.title = "Click to start recording";
+	}
 	if (transcribingEl) {
 		transcribingEl.remove();
 		transcribingEl = null;
 	}
 }
 
-/** Send transcribed text as a chat message. */
+// ── Send transcribed message ─────────────────────────────────
+
 function sendTranscribedMessage(text, audioFilename) {
-	// Unlock audio playback while we still have user-gesture context.
 	warmAudioPlayback();
 
-	// Add user message to chat (like sendChat does), including the recorded
-	// audio player when we have a saved filename from the upload endpoint.
 	if (audioFilename) {
 		var userEl = chatAddMsg("user", "", true);
 		if (userEl) {
@@ -246,7 +296,6 @@ function sendTranscribedMessage(text, audioFilename) {
 			if (text) {
 				var textWrap = document.createElement("div");
 				textWrap.className = "mt-2";
-				// Safe: renderMarkdown escapes untrusted content before formatting tags.
 				textWrap.innerHTML = renderMarkdown(text); // eslint-disable-line no-unsanitized/property
 				userEl.appendChild(textWrap);
 			}
@@ -255,15 +304,10 @@ function sendTranscribedMessage(text, audioFilename) {
 		chatAddMsg("user", renderMarkdown(text), true);
 	}
 
-	// Send the message
 	var chatParams = { text: text, _input_medium: "voice" };
-	if (audioFilename) {
-		chatParams._audio_filename = audioFilename;
-	}
+	if (audioFilename) chatParams._audio_filename = audioFilename;
 	var selectedModel = S.selectedModelId;
-	if (selectedModel) {
-		chatParams.model = selectedModel;
-	}
+	if (selectedModel) chatParams.model = selectedModel;
 	bumpSessionCount(S.activeSessionKey, 1);
 	seedSessionPreviewFromUserText(S.activeSessionKey, text);
 	setSessionReplying(S.activeSessionKey, true);
@@ -274,14 +318,14 @@ function sendTranscribedMessage(text, audioFilename) {
 	});
 }
 
-/** Send recorded audio to STT service for transcription via upload endpoint. */
+// ── Transcription ────────────────────────────────────────────
+
 async function transcribeAudio() {
 	if (audioChunks.length === 0) {
 		cleanupTranscribingState();
 		return;
 	}
 
-	// Show transcribing indicator in chat immediately
 	if (S.chatMsgBox) {
 		transcribingEl = createTranscribingIndicator("Transcribing voice...", false);
 		S.chatMsgBox.appendChild(transcribingEl);
@@ -299,8 +343,10 @@ async function transcribeAudio() {
 		});
 		var res = await resp.json();
 
-		micBtn.classList.remove("transcribing");
-		micBtn.title = "Click to start recording";
+		if (micBtn) {
+			micBtn.classList.remove("transcribing");
+			micBtn.title = "Click to start recording";
+		}
 
 		if (res.ok && res.transcription?.text) {
 			var text = res.transcription.text.trim();
@@ -320,15 +366,19 @@ async function transcribeAudio() {
 		}
 	} catch (err) {
 		console.error("Transcription error:", err);
-		micBtn.classList.remove("transcribing");
-		micBtn.title = "Click to start recording";
+		if (micBtn) {
+			micBtn.classList.remove("transcribing");
+			micBtn.title = "Click to start recording";
+		}
 		showTemporaryMessage("Transcription error", true, 4000);
 	}
 }
 
-/** Handle click on mic button - toggle recording. */
+// ── Toggle mode (mic button click) ───────────────────────────
+
 function onMicClick(e) {
 	e.preventDefault();
+	if (vadActive) return; // don't interfere with VAD mode
 	if (isRecording) {
 		stopRecording();
 	} else {
@@ -336,19 +386,241 @@ function onMicClick(e) {
 	}
 }
 
-/** Initialize voice input with the mic button element. */
+// ── PTT (push-to-talk via hotkey) ────────────────────────────
+
+function onPttKeyDown(e) {
+	if (e.key !== pttKey) return;
+	if (vadActive || pttActive || isRecording) return;
+	// Don't trigger PTT when typing in an input/textarea
+	var tag = document.activeElement?.tagName;
+	if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+
+	e.preventDefault();
+	pttActive = true;
+	console.debug("[voice] PTT start:", pttKey);
+	stopAllAudio();
+	startRecording();
+}
+
+function onPttKeyUp(e) {
+	if (e.key !== pttKey) return;
+	if (!pttActive) return;
+
+	e.preventDefault();
+	pttActive = false;
+	console.debug("[voice] PTT release — sending");
+	stopRecording();
+}
+
+// ── VAD (voice activity detection) ───────────────────────────
+
+async function startVad() {
+	if (vadActive) return;
+
+	console.debug("[voice] VAD starting");
+	try {
+		vadStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+	} catch (err) {
+		console.error("[voice] VAD mic access failed:", err);
+		if (err.name === "NotAllowedError") {
+			alert("Microphone permission denied.");
+		}
+		return;
+	}
+
+	vadActive = true;
+	vadSpeechDetected = false;
+	vadSilenceStart = 0;
+	vadSpeechStart = 0;
+	vadMutedForTts = false;
+
+	if (vadBtn) {
+		vadBtn.classList.add("vad-active");
+		vadBtn.title = "Click to stop conversation mode";
+	}
+
+	// Set up audio analysis
+	vadAudioCtx = new AudioContext();
+	var source = vadAudioCtx.createMediaStreamSource(vadStream);
+	vadAnalyser = vadAudioCtx.createAnalyser();
+	vadAnalyser.fftSize = 512;
+	vadAnalyser.smoothingTimeConstant = 0.3;
+	source.connect(vadAnalyser);
+	vadDataArray = new Uint8Array(vadAnalyser.fftSize);
+
+	// Start monitoring loop
+	vadMonitorLoop();
+
+	// Watch for TTS audio playback to mute/unmute
+	document.addEventListener("play", onTtsPlay, true);
+	document.addEventListener("ended", onTtsEnded, true);
+	document.addEventListener("pause", onTtsPause, true);
+}
+
+function stopVad() {
+	if (!vadActive) return;
+	console.debug("[voice] VAD stopping");
+
+	vadActive = false;
+	vadSpeechDetected = false;
+
+	// Cancel any ongoing recording
+	if (isRecording && mediaRecorder) {
+		audioChunks = [];
+		isRecording = false;
+		mediaRecorder.stop();
+	}
+
+	// Stop monitoring
+	if (vadRafId) {
+		cancelAnimationFrame(vadRafId);
+		vadRafId = null;
+	}
+
+	// Close audio context
+	if (vadAudioCtx) {
+		vadAudioCtx.close().catch(() => {});
+		vadAudioCtx = null;
+		vadAnalyser = null;
+		vadDataArray = null;
+	}
+
+	// Release mic
+	if (vadStream) {
+		for (var track of vadStream.getTracks()) track.stop();
+		vadStream = null;
+	}
+
+	// Clean up UI
+	if (vadBtn) {
+		vadBtn.classList.remove("vad-active", "vad-speech", "vad-listening");
+		vadBtn.title = "Conversation mode (VAD)";
+	}
+
+	document.removeEventListener("play", onTtsPlay, true);
+	document.removeEventListener("ended", onTtsEnded, true);
+	document.removeEventListener("pause", onTtsPause, true);
+}
+
+function vadMonitorLoop() {
+	if (!vadActive) return;
+
+	// Skip monitoring while TTS is playing or while we're transcribing
+	if (vadMutedForTts || micBtn?.classList.contains("transcribing")) {
+		vadRafId = requestAnimationFrame(vadMonitorLoop);
+		return;
+	}
+
+	// Also skip if the session is still replying (waiting for AI response)
+	var activeSession = sessionStore.getByKey(S.activeSessionKey);
+	if (activeSession?.replying.value) {
+		vadRafId = requestAnimationFrame(vadMonitorLoop);
+		return;
+	}
+
+	// Show listening state when not recording and not muted
+	if (!isRecording && vadBtn && !vadBtn.classList.contains("vad-listening")) {
+		vadBtn.classList.add("vad-listening");
+	}
+
+	var rms = getRMS(vadAnalyser, vadDataArray);
+	var now = Date.now();
+
+	if (rms > VAD_SPEECH_THRESHOLD) {
+		// Speech detected
+		vadSilenceStart = 0;
+
+		if (!(vadSpeechDetected || isRecording)) {
+			// Debounce: require speech for VAD_DEBOUNCE_SPEECH ms before starting
+			if (!vadSpeechStart) {
+				vadSpeechStart = now;
+			} else if (now - vadSpeechStart >= VAD_DEBOUNCE_SPEECH) {
+				vadSpeechDetected = true;
+				vadSpeechStart = 0;
+				console.debug("[voice] VAD: speech detected, starting recording");
+				stopAllAudio(); // stop any playing TTS
+				startRecording({ fromVad: true, stream: vadStream });
+			}
+		}
+	} else {
+		// Silence
+		vadSpeechStart = 0;
+
+		if (vadSpeechDetected && isRecording) {
+			if (!vadSilenceStart) {
+				vadSilenceStart = now;
+			} else if (now - vadSilenceStart >= VAD_SILENCE_DURATION) {
+				// Enough silence — stop recording and send
+				console.debug("[voice] VAD: silence detected, stopping recording");
+				vadSpeechDetected = false;
+				vadSilenceStart = 0;
+				if (vadBtn) {
+					vadBtn.classList.remove("vad-speech", "vad-listening");
+				}
+				isRecording = false;
+				mediaRecorder.stop();
+				// mediaRecorder.onstop will call transcribeAudio
+			}
+		}
+	}
+
+	vadRafId = requestAnimationFrame(vadMonitorLoop);
+}
+
+// ── TTS mute/unmute for VAD ──────────────────────────────────
+
+function onTtsPlay(e) {
+	if (!vadActive) return;
+	if (e.target?.tagName !== "AUDIO") return;
+	console.debug("[voice] VAD: TTS playing, muting VAD");
+	vadMutedForTts = true;
+	if (vadBtn) vadBtn.classList.remove("vad-listening");
+}
+
+function onTtsEnded(e) {
+	if (!vadActive) return;
+	if (e.target?.tagName !== "AUDIO") return;
+	console.debug("[voice] VAD: TTS ended, resuming VAD");
+	vadMutedForTts = false;
+	vadSpeechDetected = false;
+	vadSilenceStart = 0;
+	vadSpeechStart = 0;
+	// Small delay before re-listening to avoid catching tail-end of TTS
+	setTimeout(() => {
+		if (vadActive && !vadMutedForTts && vadBtn) vadBtn.classList.add("vad-listening");
+	}, 300);
+}
+
+function onTtsPause(e) {
+	if (!vadActive) return;
+	if (e.target?.tagName !== "AUDIO") return;
+	// Treat pause same as ended for VAD purposes
+	vadMutedForTts = false;
+}
+
+// ── VAD button click ─────────────────────────────────────────
+
+function onVadClick(e) {
+	e.preventDefault();
+	if (vadActive) {
+		stopVad();
+	} else {
+		startVad();
+	}
+}
+
+// ── Init / teardown ──────────────────────────────────────────
+
 export function initVoiceInput(btn) {
 	if (!btn) return;
-
 	micBtn = btn;
 
-	// Check STT status on init
 	checkSttStatus();
 
-	// Click to toggle recording (start on first click, stop on second)
+	// Toggle mode: click to start/stop
 	micBtn.addEventListener("click", onMicClick);
 
-	// Keyboard accessibility: Space/Enter to toggle
+	// Keyboard accessibility
 	micBtn.addEventListener("keydown", (e) => {
 		if (e.key === " " || e.key === "Enter") {
 			e.preventDefault();
@@ -356,31 +628,63 @@ export function initVoiceInput(btn) {
 		}
 	});
 
-	// Escape cancels recording without sending.
+	// Escape cancels recording
 	document.addEventListener("keydown", (e) => {
 		if (e.key === "Escape" && isRecording) {
 			e.preventDefault();
 			cancelRecording();
+			// Also stop VAD if active
+			if (vadActive) stopVad();
 		}
 	});
+
+	// PTT: global key handlers
+	document.addEventListener("keydown", onPttKeyDown);
+	document.addEventListener("keyup", onPttKeyUp);
 
 	// Re-check STT status when voice config changes
 	window.addEventListener("voice-config-changed", checkSttStatus);
 }
 
-/** Teardown voice input module. */
+export function initVadButton(btn) {
+	if (!btn) return;
+	vadBtn = btn;
+	updateVadButton();
+	vadBtn.addEventListener("click", onVadClick);
+}
+
 export function teardownVoiceInput() {
+	if (vadActive) stopVad();
 	if (isRecording && mediaRecorder) {
 		mediaRecorder.stop();
 	}
+	document.removeEventListener("keydown", onPttKeyDown);
+	document.removeEventListener("keyup", onPttKeyUp);
 	window.removeEventListener("voice-config-changed", checkSttStatus);
 	micBtn = null;
+	vadBtn = null;
 	mediaRecorder = null;
 	audioChunks = [];
 	isRecording = false;
 }
 
-/** Re-check STT status (can be called externally). */
 export function refreshVoiceStatus() {
 	checkSttStatus();
+}
+
+/** Update PTT key at runtime. */
+export function setPttKey(key) {
+	pttKey = key;
+	localStorage.setItem("moltis_ptt_key", key);
+	console.debug("[voice] PTT key set to:", key);
+}
+
+/** Get current PTT key. */
+export function getPttKey() {
+	return pttKey;
+}
+
+/** Check if VAD is currently active. */
+export function isVadModeActive() {
+	return vadActive;
 }

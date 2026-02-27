@@ -26,7 +26,7 @@ import {
 	switchSession,
 } from "./sessions.js";
 import * as S from "./state.js";
-import { initVoiceInput, teardownVoiceInput } from "./voice-input.js";
+import { initVoiceInput, initVadButton, teardownVoiceInput } from "./voice-input.js";
 
 // ── Slash commands ───────────────────────────────────────
 var slashCommands = [
@@ -740,6 +740,12 @@ function toggleMcp() {
 	sendRpc("sessions.patch", { key: S.activeSessionKey, mcpDisabled: newDisabled }).then((res) => {
 		if (res?.ok) {
 			updateMcpToggleUI(!newDisabled);
+			// Persist to model override config so LLMs tab stays in sync
+			var modelId = S.selectedModelId;
+			if (modelId) {
+				var overrideKey = modelId.split("::").pop();
+				sendRpc("tools.model_overrides.set", { key: overrideKey, mcp_enabled: !newDisabled });
+			}
 		}
 	});
 }
@@ -1016,6 +1022,10 @@ var chatPageHTML =
 	'class="mic-btn min-h-[40px] px-3 bg-[var(--surface2)] border border-[var(--border)] rounded-lg text-[var(--muted)] cursor-pointer disabled:opacity-40 disabled:cursor-default transition-colors hover:border-[var(--border-strong)] hover:text-[var(--text)]">' +
 	'<span class="icon icon-lg icon-microphone"></span>' +
 	"</button>" +
+	'<button id="vadBtn" disabled title="Conversation mode (VAD)" ' +
+	'class="vad-btn min-h-[40px] px-3 bg-[var(--surface2)] border border-[var(--border)] rounded-lg text-[var(--muted)] cursor-pointer disabled:opacity-40 disabled:cursor-default transition-colors hover:border-[var(--border-strong)] hover:text-[var(--text)]">' +
+	'<span class="icon icon-lg icon-waveform"></span>' +
+	"</button>" +
 	'<button id="sendBtn" disabled ' +
 	'class="provider-btn min-h-[40px] disabled:opacity-40 disabled:cursor-default">Send</button>' +
 	"</div></div>";
@@ -1165,6 +1175,7 @@ registerPrefix(
 
 		// Initialize voice input
 		initVoiceInput(S.$("micBtn"));
+		initVadButton(S.$("vadBtn"));
 
 		// Desktop only: mobile keeps chat focused and avoids drag/drop chrome.
 		if (window.innerWidth >= 768) {
