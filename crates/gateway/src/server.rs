@@ -2837,12 +2837,11 @@ pub async fn start_gateway(
             .await;
         crate::mcp_service::sync_mcp_tools(live_mcp.manager(), &shared_tool_registry).await;
 
-        // Register discover_tools with a snapshot of all available schemas
-        // (including MCP tools).  Must happen after MCP sync.
+        // Register discover_tools with a live reference to the tool registry.
+        // Queries current tools on each call (reflects MCP toggles, late-loaded tools).
         {
-            let all_schemas = shared_tool_registry.read().await.list_schemas();
             shared_tool_registry.write().await.register(Box::new(
-                moltis_tools::discover_tools::DiscoverToolsTool::new(all_schemas),
+                moltis_tools::discover_tools::DiscoverToolsTool::new(Arc::clone(&shared_tool_registry)),
             ));
         }
 
@@ -3527,6 +3526,9 @@ pub async fn start_gateway(
             }
         });
     }
+
+    // Start the Claude OAuth token refresher (keeps ~/.claude/.credentials.json fresh).
+    moltis_providers::claude_oauth_refresh::spawn_refresher();
 
     // Start the cron scheduler (loads persisted jobs, arms the timer).
     if let Err(e) = cron_service.start().await {
