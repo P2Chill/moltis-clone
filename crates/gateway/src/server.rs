@@ -2343,14 +2343,32 @@ pub async fn start_gateway(
                     let data_memory_file_lower = data_dir.join("memory.md");
                     let data_memory_sub = data_dir.join("memory");
 
+                    // Expand extra_paths from config, resolving ~ to home dir.
+                    let home_dir = PathBuf::from(std::env::var("HOME").unwrap_or_default());
+                    let extra_dirs: Vec<PathBuf> = mem_cfg
+                        .extra_paths
+                        .iter()
+                        .map(|p| {
+                            let expanded = if p.starts_with("~/") {
+                                home_dir.join(&p[2..])
+                            } else {
+                                PathBuf::from(p)
+                            };
+                            expanded
+                        })
+                        .collect();
+
+                    let mut all_memory_dirs = vec![
+                        data_memory_file,
+                        data_memory_file_lower,
+                        data_memory_sub,
+                    ];
+                    all_memory_dirs.extend(extra_dirs);
+
                     let config = moltis_memory::config::MemoryConfig {
                         db_path: memory_db_path.to_string_lossy().into(),
                         data_dir: Some(data_dir.clone()),
-                        memory_dirs: vec![
-                            data_memory_file,
-                            data_memory_file_lower,
-                            data_memory_sub,
-                        ],
+                        memory_dirs: all_memory_dirs,
                         ..Default::default()
                     };
 

@@ -380,6 +380,7 @@ fn build_schema_map() -> KnownKeys {
                 ("citations", Leaf),
                 ("llm_reranking", Leaf),
                 ("session_export", Leaf),
+                ("extra_paths", Leaf),
                 ("qmd", qmd()),
             ])),
         ),

@@ -818,6 +818,11 @@ pub struct MemoryEmbeddingConfig {
     /// Enable session export to memory for cross-run recall.
     #[serde(default)]
     pub session_export: bool,
+    /// Extra directories or files to index in addition to the default ~/.moltis/memory/ paths.
+    /// Supports ~ expansion. Each entry can be a directory (scanned recursively for .md/.txt)
+    /// or a specific file path.
+    #[serde(default)]
+    pub extra_paths: Vec<String>,
     /// QMD-specific configuration (only used when backend = "qmd").
     #[serde(default)]
     pub qmd: QmdConfig,
@@ -1596,13 +1601,17 @@ impl Default for SandboxConfig {
     }
 }
 
-/// Tool policy configuration (allow/deny lists).
+/// Tool policy configuration (allow/deny lists and per-model trust overrides).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ToolPolicyConfig {
     pub allow: Vec<String>,
     pub deny: Vec<String>,
     pub profile: Option<String>,
+    /// Override MCP tool availability for this model. None = inherit session/channel default.
+    pub mcp_enabled: Option<bool>,
+    /// Override sandbox mode for this model. None = inherit session/channel default.
+    pub sandbox_enabled: Option<bool>,
 }
 
 /// OAuth provider configuration (e.g. openai-codex).
