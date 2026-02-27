@@ -313,6 +313,7 @@ function cleanupTranscribingState() {
 // ── Send transcribed message ─────────────────────────────────
 
 function sendTranscribedMessage(text, audioFilename) {
+	window._moltisVoiceSource = true;
 	warmAudioPlayback();
 
 	if (audioFilename) {
