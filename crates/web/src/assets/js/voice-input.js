@@ -39,10 +39,11 @@ var vadSpeechDetected = false;
 var vadSilenceStart = 0;
 var vadMutedForTts = false;
 var VAD_SPEECH_THRESHOLD = 0.015; // RMS threshold — speech above this
-var VAD_SILENCE_DURATION = 1500; // ms of silence before auto-send
+var VAD_SILENCE_DURATION = 2500; // ms of silence before auto-send
 var VAD_DEBOUNCE_SPEECH = 150; // ms of speech before we start recording
 var vadSpeechStart = 0;
 var vadRecordingStart = 0;
+var vadMediaRecorder = null; // separate recorder for VAD continuous mode
 
 /** Check if voice feature is enabled. */
 function isVoiceEnabled() {
@@ -129,7 +130,7 @@ async function startRecording(opts) {
 
 	try {
 		if (!stream) {
-			stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+			stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
 		}
 		audioChunks = [];
 		var recordingUiShown = false;
@@ -424,7 +425,9 @@ async function startVad() {
 
 	console.debug("[voice] VAD starting");
 	try {
-		vadStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+		vadStream = await navigator.mediaDevices.getUserMedia({
+			audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+		});
 	} catch (err) {
 		console.error("[voice] VAD mic access failed:", err);
 		if (err.name === "NotAllowedError") {
@@ -453,6 +456,10 @@ async function startVad() {
 	source.connect(vadAnalyser);
 	vadDataArray = new Uint8Array(vadAnalyser.fftSize);
 
+	// Start continuous recording immediately — captures full audio including
+	// lead-in before speech detection, so Whisper gets complete utterances.
+	vadStartContinuousRecorder();
+
 	// Start monitoring loop
 	vadMonitorLoop();
 
@@ -462,6 +469,40 @@ async function startVad() {
 	document.addEventListener("pause", onTtsPause, true);
 }
 
+/** Start (or restart) the continuous MediaRecorder for VAD mode.
+ *  Runs the entire time we are listening — speech/silence detection
+ *  only decides when to STOP and SEND, not when to start recording. */
+function vadStartContinuousRecorder() {
+	if (!vadActive || !vadStream) return;
+	audioChunks = [];
+	var mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+		? "audio/webm;codecs=opus" : "audio/webm";
+	vadMediaRecorder = new MediaRecorder(vadStream, { mimeType });
+	vadMediaRecorder.ondataavailable = (e) => {
+		if (e.data.size > 0) audioChunks.push(e.data);
+	};
+	vadMediaRecorder.onstop = async () => {
+		if (vadBtn) vadBtn.classList.remove("vad-speech");
+		// Only transcribe if we actually detected speech in this cycle
+		if (audioChunks.length > 0 && vadSpeechDetected) {
+			vadSpeechDetected = false;
+			await transcribeAudio();
+		} else {
+			audioChunks = [];
+			vadSpeechDetected = false;
+		}
+		// Restart recorder for next listening cycle (if still active and not muted)
+		if (vadActive && !vadMutedForTts) {
+			var activeSession = sessionStore.getByKey(S.activeSessionKey);
+			if (!(activeSession?.replying.value)) {
+				vadStartContinuousRecorder();
+			}
+		}
+	};
+	vadMediaRecorder.start(250); // collect data every 250ms
+	console.debug("[voice] VAD continuous recorder started");
+}
+
 function stopVad() {
 	if (!vadActive) return;
 	console.debug("[voice] VAD stopping");
@@ -469,7 +510,14 @@ function stopVad() {
 	vadActive = false;
 	vadSpeechDetected = false;
 
-	// Cancel any ongoing recording
+	// Stop VAD continuous recorder
+	if (vadMediaRecorder && vadMediaRecorder.state !== "inactive") {
+		audioChunks = []; // discard — we're shutting down, not sending
+		vadMediaRecorder.stop();
+	}
+	vadMediaRecorder = null;
+
+	// Cancel any ongoing toggle/PTT recording too
 	if (isRecording && mediaRecorder) {
 		audioChunks = [];
 		isRecording = false;
@@ -510,7 +558,7 @@ function stopVad() {
 function vadMonitorLoop() {
 	if (!vadActive) return;
 
-	// Skip monitoring while TTS is playing or while we're transcribing
+	// Skip monitoring while TTS is playing or while we are transcribing
 	if (vadMutedForTts || micBtn?.classList.contains("transcribing")) {
 		vadRafId = requestAnimationFrame(vadMonitorLoop);
 		return;
@@ -523,9 +571,15 @@ function vadMonitorLoop() {
 		return;
 	}
 
-	// Show listening state when not recording and not muted
-	if (!isRecording && vadBtn && !vadBtn.classList.contains("vad-listening")) {
+	// Show listening state when recorder is running
+	if (vadMediaRecorder && vadMediaRecorder.state === "recording" && vadBtn &&
+		!vadBtn.classList.contains("vad-listening") && !vadBtn.classList.contains("vad-speech")) {
 		vadBtn.classList.add("vad-listening");
+	}
+
+	// Restart recorder if it died (e.g. after TTS mute cycle or replying wait)
+	if (!vadMediaRecorder || vadMediaRecorder.state === "inactive") {
+		vadStartContinuousRecorder();
 	}
 
 	var rms = getRMS(vadAnalyser, vadDataArray);
@@ -534,39 +588,38 @@ function vadMonitorLoop() {
 	// Debug: log RMS every ~1s
 	if (!vadMonitorLoop._lastLog || now - vadMonitorLoop._lastLog > 1000) {
 		vadMonitorLoop._lastLog = now;
-		console.debug("[voice] VAD rms:", rms.toFixed(4), "speech:", vadSpeechDetected, "recording:", isRecording, "muted:", vadMutedForTts);
+		console.debug("[voice] VAD rms:", rms.toFixed(4), "speech:", vadSpeechDetected, "muted:", vadMutedForTts);
 	}
 
 	if (rms > VAD_SPEECH_THRESHOLD) {
 		// Speech detected
 		vadSilenceStart = 0;
 
-		// Safety valve: auto-stop after 30s of continuous recording
-		if (vadSpeechDetected && isRecording && vadRecordingStart && (now - vadRecordingStart > 30000)) {
-			console.debug("[voice] VAD: max recording duration reached, auto-stopping");
-			vadSpeechDetected = false;
+		// Safety valve: auto-stop after 30s of continuous speech
+		if (vadSpeechDetected && vadRecordingStart && (now - vadRecordingStart > 30000)) {
+			console.debug("[voice] VAD: max duration reached, auto-sending");
 			vadSilenceStart = 0;
 			vadRecordingStart = 0;
 			if (vadBtn) vadBtn.classList.remove("vad-speech", "vad-listening");
-			if (isRecording && mediaRecorder && mediaRecorder.state === "recording") {
-				isRecording = false;
-				mediaRecorder.stop();
+			// Stop the continuous recorder — onstop will transcribe and restart
+			if (vadMediaRecorder && vadMediaRecorder.state === "recording") {
+				vadMediaRecorder.stop();
 			}
 			vadRafId = requestAnimationFrame(vadMonitorLoop);
 			return;
 		}
 
-		if (!(vadSpeechDetected || isRecording)) {
-			// Debounce: require speech for VAD_DEBOUNCE_SPEECH ms before starting
+		if (!vadSpeechDetected) {
+			// Debounce: require speech for VAD_DEBOUNCE_SPEECH ms before marking
 			if (!vadSpeechStart) {
 				vadSpeechStart = now;
 			} else if (now - vadSpeechStart >= VAD_DEBOUNCE_SPEECH) {
 				vadSpeechDetected = true;
 				vadSpeechStart = 0;
-				console.debug("[voice] VAD: speech detected, starting recording");
 				vadRecordingStart = now;
+				console.debug("[voice] VAD: speech detected (recorder already running)");
 				stopAllAudio(); // stop any playing TTS
-				startRecording({ fromVad: true, stream: vadStream });
+				if (vadBtn) vadBtn.classList.add("vad-speech");
 			}
 		}
 	} else {
@@ -577,25 +630,20 @@ function vadMonitorLoop() {
 			if (!vadSilenceStart) {
 				vadSilenceStart = now;
 			} else if (now - vadSilenceStart >= VAD_SILENCE_DURATION) {
-				// Enough silence — stop recording and send
-				console.debug("[voice] VAD: silence detected, stopping recording. isRecording:", isRecording);
+				// Enough silence after speech — stop recorder and send
+				console.debug("[voice] VAD: silence detected, stopping & sending");
 				vadRecordingStart = 0;
-				vadSpeechDetected = false;
 				vadSilenceStart = 0;
-				if (vadBtn) {
-					vadBtn.classList.remove("vad-speech", "vad-listening");
-				}
-				if (isRecording && mediaRecorder && mediaRecorder.state === "recording") {
-					isRecording = false;
-					mediaRecorder.stop();
+				if (vadBtn) vadBtn.classList.remove("vad-speech", "vad-listening");
+				// Stop the continuous recorder — onstop handler will transcribe
+				// and restart a new recorder for the next cycle
+				if (vadMediaRecorder && vadMediaRecorder.state === "recording") {
+					vadMediaRecorder.stop();
 				} else {
-					// Recording never fully started — clean up
-					isRecording = false;
-					isStarting = false;
+					// Recorder already stopped somehow — clean up
+					vadSpeechDetected = false;
 					audioChunks = [];
-					cleanupTranscribingState();
 				}
-				// mediaRecorder.onstop will call transcribeAudio
 			}
 		}
 	}
@@ -608,23 +656,33 @@ function vadMonitorLoop() {
 function onTtsPlay(e) {
 	if (!vadActive) return;
 	if (e.target?.tagName !== "AUDIO") return;
-	console.debug("[voice] VAD: TTS playing, muting VAD");
+	console.debug("[voice] VAD: TTS playing, muting VAD + stopping recorder");
 	vadMutedForTts = true;
-	if (vadBtn) vadBtn.classList.remove("vad-listening");
+	if (vadBtn) vadBtn.classList.remove("vad-listening", "vad-speech");
+	// Stop recorder during TTS to avoid capturing playback audio
+	if (vadMediaRecorder && vadMediaRecorder.state === "recording") {
+		vadSpeechDetected = false; // discard any partial speech
+		audioChunks = [];
+		vadMediaRecorder.stop();
+		vadMediaRecorder = null;
+	}
 }
 
 function onTtsEnded(e) {
 	if (!vadActive) return;
 	if (e.target?.tagName !== "AUDIO") return;
-	console.debug("[voice] VAD: TTS ended, resuming VAD");
-	vadMutedForTts = false;
+	console.debug("[voice] VAD: TTS ended, resuming VAD after delay");
 	vadSpeechDetected = false;
 	vadSilenceStart = 0;
 	vadSpeechStart = 0;
-	// Brief delay before re-listening
+	// Delay before re-listening — let TTS reverb/echo settle
 	setTimeout(() => {
-		if (vadActive && !vadMutedForTts && vadBtn) vadBtn.classList.add("vad-listening");
-	}, 50);
+		if (!vadActive) return;
+		vadMutedForTts = false;
+		// Start fresh recorder for new listening cycle
+		vadStartContinuousRecorder();
+		if (vadBtn) vadBtn.classList.add("vad-listening");
+	}, 400);
 }
 
 function onTtsPause(e) {
@@ -700,6 +758,7 @@ export function teardownVoiceInput() {
 	micBtn = null;
 	vadBtn = null;
 	mediaRecorder = null;
+	vadMediaRecorder = null;
 	audioChunks = [];
 	isRecording = false;
 }
@@ -724,3 +783,4 @@ export function getPttKey() {
 export function isVadModeActive() {
 	return vadActive;
 }
+
