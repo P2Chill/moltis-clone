@@ -233,6 +233,8 @@ fn build_schema_map() -> KnownKeys {
             ("agent_timeout_secs", Leaf),
             ("agent_max_iterations", Leaf),
             ("max_tool_result_bytes", Leaf),
+            ("lazy_tools", Leaf),
+            ("core_tools", Leaf),
         ]))
     };
 

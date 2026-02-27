@@ -21,6 +21,7 @@ pub fn shared_http_client() -> &'static reqwest::Client {
 }
 pub mod browser;
 pub mod calc;
+pub mod discover_tools;
 pub mod cron_tool;
 pub mod exec;
 pub mod image_cache;
