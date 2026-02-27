@@ -28,6 +28,31 @@ var transcribingEl = null;
 var pttKey = localStorage.getItem("moltis_ptt_key") || "F13";
 var pttActive = false; // true while PTT key is held
 
+// ── Tab coordination (prevent dual-tab recording) ────────────
+// Only one tab should handle PTT/toggle at a time. When a tab starts
+// recording, it broadcasts a claim. Other tabs back off.
+var voiceLockChannel = typeof BroadcastChannel !== "undefined"
+	? new BroadcastChannel("moltis_voice_lock") : null;
+var voiceLockedByOtherTab = false;
+if (voiceLockChannel) {
+	voiceLockChannel.onmessage = (e) => {
+		if (e.data?.type === "voice_lock") {
+			voiceLockedByOtherTab = true;
+			console.debug("[voice] another tab claimed voice lock");
+		} else if (e.data?.type === "voice_unlock") {
+			voiceLockedByOtherTab = false;
+			console.debug("[voice] another tab released voice lock");
+		}
+	};
+}
+function claimVoiceLock() {
+	voiceLockedByOtherTab = false;
+	if (voiceLockChannel) voiceLockChannel.postMessage({ type: "voice_lock" });
+}
+function releaseVoiceLock() {
+	if (voiceLockChannel) voiceLockChannel.postMessage({ type: "voice_unlock" });
+}
+
 // ── VAD state ────────────────────────────────────────────────
 var vadActive = false;
 var vadStream = null;
@@ -38,9 +63,9 @@ var vadRafId = null;
 var vadSpeechDetected = false;
 var vadSilenceStart = 0;
 var vadMutedForTts = false;
-var VAD_SPEECH_THRESHOLD = 0.015; // RMS threshold — speech above this
+var VAD_SPEECH_THRESHOLD = 0.045; // RMS threshold — speech above this
 var VAD_SILENCE_DURATION = 2500; // ms of silence before auto-send
-var VAD_DEBOUNCE_SPEECH = 150; // ms of speech before we start recording
+var VAD_DEBOUNCE_SPEECH = 250; // ms of speech before we consider it speech
 var vadSpeechStart = 0;
 var vadRecordingStart = 0;
 var vadMediaRecorder = null; // separate recorder for VAD continuous mode
@@ -382,8 +407,11 @@ function onMicClick(e) {
 	e.preventDefault();
 	if (vadActive) return; // don't interfere with VAD mode
 	if (isRecording) {
+		releaseVoiceLock();
 		stopRecording();
 	} else {
+		if (voiceLockedByOtherTab) return; // another tab is recording
+		claimVoiceLock();
 		startRecording();
 	}
 }
@@ -402,7 +430,9 @@ function onPttKeyDown(e) {
 	}
 
 	e.preventDefault();
+	if (voiceLockedByOtherTab) return; // another tab is recording
 	pttActive = true;
+	claimVoiceLock();
 	console.debug("[voice] PTT start:", pttKey);
 	stopAllAudio();
 	startRecording();
@@ -414,6 +444,7 @@ function onPttKeyUp(e) {
 
 	e.preventDefault();
 	pttActive = false;
+	releaseVoiceLock();
 	console.debug("[voice] PTT release — sending");
 	stopRecording();
 }
@@ -441,6 +472,7 @@ async function startVad() {
 	vadSilenceStart = 0;
 	vadSpeechStart = 0;
 	vadMutedForTts = false;
+	claimVoiceLock();
 
 	if (vadBtn) {
 		vadBtn.classList.add("vad-active");
@@ -549,6 +581,8 @@ function stopVad() {
 		vadBtn.classList.remove("vad-active", "vad-speech", "vad-listening");
 		vadBtn.title = "Conversation mode (VAD)";
 	}
+
+	releaseVoiceLock();
 
 	document.removeEventListener("play", onTtsPlay, true);
 	document.removeEventListener("ended", onTtsEnded, true);
@@ -755,6 +789,7 @@ export function teardownVoiceInput() {
 	document.removeEventListener("keydown", onPttKeyDown);
 	document.removeEventListener("keyup", onPttKeyUp);
 	window.removeEventListener("voice-config-changed", checkSttStatus);
+	releaseVoiceLock();
 	micBtn = null;
 	vadBtn = null;
 	mediaRecorder = null;
@@ -783,4 +818,5 @@ export function getPttKey() {
 export function isVadModeActive() {
 	return vadActive;
 }
+
 
