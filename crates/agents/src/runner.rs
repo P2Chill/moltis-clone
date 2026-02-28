@@ -857,7 +857,21 @@ pub async fn run_agent_loop_with_context(
     let max_tool_result_bytes = config.tools.max_tool_result_bytes;
     let max_iterations = resolve_agent_max_iterations(config.tools.agent_max_iterations);
     let tool_schemas = tools.list_schemas();
-    let lazy_tools = config.tools.lazy_tools;
+    let lazy_tools = {
+        let model_id = provider.id().to_lowercase();
+        config
+            .tools
+            .model_overrides
+            .iter()
+            .find_map(|(key, ov)| {
+                if model_id.contains(&key.to_lowercase()) {
+                    ov.lazy_tools
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(config.tools.lazy_tools)
+    };
 
     let is_multimodal = matches!(user_content, UserContent::Multimodal(_));
     info!(
@@ -1351,7 +1365,21 @@ pub async fn run_agent_loop_streaming(
     let max_tool_result_bytes = config.tools.max_tool_result_bytes;
     let max_iterations = resolve_agent_max_iterations(config.tools.agent_max_iterations);
     let tool_schemas = tools.list_schemas();
-    let lazy_tools = config.tools.lazy_tools;
+    let lazy_tools = {
+        let model_id = provider.id().to_lowercase();
+        config
+            .tools
+            .model_overrides
+            .iter()
+            .find_map(|(key, ov)| {
+                if model_id.contains(&key.to_lowercase()) {
+                    ov.lazy_tools
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(config.tools.lazy_tools)
+    };
 
     let is_multimodal = matches!(user_content, UserContent::Multimodal(_));
     info!(
@@ -1955,6 +1983,11 @@ pub async fn run_agent_loop_streaming(
             trace!(tool = %tc.name, content = %tool_result_str, "tool result message content");
 
             messages.push(ChatMessage::tool(&tc.id, &tool_result_str));
+
+            // Lazy tool injection: expand schemas_for_api with discovered tools.
+            if lazy_tools {
+                inject_discovered_schemas(&mut schemas_for_api, &tc.name, success, &result);
+            }
         }
     }
 }

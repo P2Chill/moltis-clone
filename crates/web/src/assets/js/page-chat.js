@@ -740,6 +740,12 @@ function toggleMcp() {
 	sendRpc("sessions.patch", { key: S.activeSessionKey, mcpDisabled: newDisabled }).then((res) => {
 		if (res?.ok) {
 			updateMcpToggleUI(!newDisabled);
+			// Persist to model override config so LLMs tab stays in sync
+			var modelId = S.selectedModelId;
+			if (modelId) {
+				var overrideKey = modelId.split("::").pop();
+				sendRpc("tools.model_overrides.set", { key: overrideKey, mcp_enabled: !newDisabled });
+			}
 		}
 	});
 }
