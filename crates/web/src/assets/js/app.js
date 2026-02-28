@@ -390,7 +390,7 @@ function fetchBootstrap() {
 	// Fetch bootstrap data asynchronously — populates sidebar, models, projects
 	// as soon as the data arrives, without blocking the initial page render.
 	fetch("/api/bootstrap")
-		.then((r) => r.json())
+		.then((r) => r.ok ? r.json() : Promise.reject(r.status))
 		.then((boot) => {
 			if (boot.channels) S.setCachedChannels(boot.channels.channels || boot.channels || []);
 			if (boot.sessions) {
