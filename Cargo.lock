@@ -6262,6 +6262,7 @@ dependencies = [
  "futures",
  "genai",
  "http 1.4.0",
+ "image",
  "llama-cpp-2",
  "moltis-agents",
  "moltis-common",
