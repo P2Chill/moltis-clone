@@ -65,6 +65,29 @@ impl AnthropicProvider {
             use_bearer: true,
         }
     }
+
+    /// Read the current Bearer token from disk (for OAuth mode).
+    /// Falls back to the stored api_key if the file cannot be read.
+    /// This allows Claude Code to refresh the token without restarting moltis.
+    fn live_token(&self) -> String {
+        if !self.use_bearer {
+            return self.api_key.expose_secret().to_string();
+        }
+        let token = std::env::var("HOME").ok().and_then(|home| {
+            let path = std::path::Path::new(&home)
+                .join(".claude")
+                .join(".credentials.json");
+            let content = std::fs::read_to_string(&path).ok()?;
+            let json: serde_json::Value = serde_json::from_str(&content).ok()?;
+            let token = json["claudeAiOauth"]["accessToken"].as_str()?.to_string();
+            if token.is_empty() {
+                None
+            } else {
+                Some(token)
+            }
+        });
+        token.unwrap_or_else(|| self.api_key.expose_secret().to_string())
+    }
 }
 
 /// Convert tool schemas from the generic format to Anthropic's tool format.
@@ -288,11 +311,19 @@ impl LlmProvider for AnthropicProvider {
             .client
             .post(format!("{}/v1/messages", self.base_url))
             .header(
-                    if self.use_bearer { "Authorization" } else { "x-api-key" },
-                    if self.use_bearer { format!("Bearer {}", self.api_key.expose_secret()) } else { self.api_key.expose_secret().to_string() },
-                )
+                if self.use_bearer { "Authorization" } else { "x-api-key" },
+                if self.use_bearer {
+                    format!("Bearer {}", self.live_token())
+                } else {
+                    self.api_key.expose_secret().to_string()
+                },
+            )
             .header("anthropic-version", "2023-06-01")
             .header("content-type", "application/json")
+            .header(
+                "anthropic-beta",
+                if self.use_bearer { "oauth-2025-04-20" } else { "" },
+            )
             .json(&body)
             .send()
             .await?;
@@ -393,10 +424,15 @@ impl LlmProvider for AnthropicProvider {
                 .post(format!("{}/v1/messages", self.base_url))
                 .header(
                     if self.use_bearer { "Authorization" } else { "x-api-key" },
-                    if self.use_bearer { format!("Bearer {}", self.api_key.expose_secret()) } else { self.api_key.expose_secret().to_string() },
+                    if self.use_bearer {
+                        format!("Bearer {}", self.live_token())
+                    } else {
+                        self.api_key.expose_secret().to_string()
+                    },
                 )
                 .header("anthropic-version", "2023-06-01")
                 .header("content-type", "application/json")
+                .header("anthropic-beta", if self.use_bearer { "oauth-2025-04-20" } else { "" })
                 .json(&body)
                 .send()
                 .await
