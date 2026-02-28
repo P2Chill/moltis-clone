@@ -99,6 +99,7 @@ pub fn build_system_prompt(
         None,
         None,
         None,
+        None,
     )
 }
 
@@ -144,6 +145,7 @@ pub fn build_system_prompt_minimal_runtime(
     tools_text: Option<&str>,
     runtime_context: Option<&PromptRuntimeContext>,
     memory_text: Option<&str>,
+    profile_text: Option<&str>,
 ) -> String {
     build_system_prompt_full(
         &ToolRegistry::new(),
@@ -996,6 +998,7 @@ mod tests {
             None,
             Some(&runtime),
             None,
+            None,
         );
 
         assert!(prompt.contains("## Runtime"));
@@ -1020,7 +1023,7 @@ mod tests {
     #[test]
     fn test_silent_replies_not_in_minimal_prompt() {
         let prompt =
-            build_system_prompt_minimal_runtime(None, None, None, None, None, None, None, None);
+            build_system_prompt_minimal_runtime(None, None, None, None, None, None, None, None, None);
         assert!(!prompt.contains("## Silent Replies"));
     }
 
@@ -1104,6 +1107,7 @@ mod tests {
             None,
             None,
             Some(memory),
+            None,
         );
         assert!(prompt.contains("## Long-Term Memory"));
         assert!(prompt.contains("Important fact"));
