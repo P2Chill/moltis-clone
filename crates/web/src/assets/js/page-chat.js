@@ -750,6 +750,41 @@ function toggleMcp() {
 	});
 }
 
+// ── Think toggle ─────────────────────────────────────────
+export function updateThinkToggleUI(enabled) {
+	var btn = S.$("thinkToggleBtn");
+	var label = S.$("thinkToggleLabel");
+	if (!btn) return;
+	if (enabled) {
+		btn.style.color = "var(--accent)";
+		btn.style.borderColor = "var(--accent)";
+		if (label) label.textContent = "Think ✓";
+		btn.title = "Extended thinking enabled — click to disable";
+	} else {
+		btn.style.color = "var(--muted)";
+		btn.style.borderColor = "var(--border)";
+		if (label) label.textContent = "Think";
+		btn.title = "Extended thinking disabled — click to enable";
+	}
+}
+
+function toggleThink() {
+	var label = S.$("thinkToggleLabel");
+	var currentlyEnabled = label && label.textContent.includes("✓");
+	var newVal = !currentlyEnabled;
+	sendRpc("sessions.patch", { key: S.activeSessionKey, thinkingEnabled: newVal }).then((res) => {
+		if (res?.ok) {
+			updateThinkToggleUI(newVal);
+			// Persist to model override config so LLMs tab stays in sync
+			var modelId = S.selectedModelId;
+			if (modelId) {
+				var overrideKey = modelId.split("::").pop();
+				sendRpc("tools.model_overrides.set", { key: overrideKey, thinking_enabled: newVal });
+			}
+		}
+	});
+}
+
 // ── Model change notice ──────────────────────────────────
 export function showModelNotice(model) {
 	if (!S.chatMsgBox) return;
@@ -997,6 +1032,10 @@ var chatPageHTML =
 	'<span class="icon icon-md icon-link" style="flex-shrink:0;"></span>' +
 	'<span id="mcpToggleLabel">MCP</span>' +
 	"</button>" +
+	'<button id="thinkToggleBtn" class="mobile-toolbar-extra text-xs border border-[var(--border)] px-2 py-1 rounded-md transition-colors cursor-pointer bg-transparent font-[var(--font-body)]" style="display:inline-flex;align-items:center;gap:4px;color:var(--muted);" title="Toggle extended thinking">' +
+	'<span class="icon icon-md icon-sparkles" style="flex-shrink:0;"></span>' +
+	'<span id="thinkToggleLabel">Think</span>' +
+	"</button>" +
 	'<button id="debugPanelBtn" class="mobile-toolbar-hide text-xs border border-[var(--border)] px-2 py-1 rounded-md transition-colors cursor-pointer bg-transparent font-[var(--font-body)]" style="display:inline-flex;align-items:center;gap:4px;color:var(--muted);" title="Show context debug info">' +
 	'<span class="icon icon-md icon-wrench" style="flex-shrink:0;"></span>' +
 	'<span id="debugPanelLabel">Debug</span>' +
@@ -1079,7 +1118,7 @@ registerPrefix(
 		S.setSandboxToggleBtn(S.$("sandboxToggle"));
 		S.setSandboxLabel(S.$("sandboxLabel"));
 		bindSandboxToggleEvents();
-		updateSandboxUI(true);
+		updateSandboxUI(false); // default off; context() will set real value
 
 		S.setSandboxImageBtn(S.$("sandboxImageBtn"));
 		S.setSandboxImageLabel(S.$("sandboxImageLabel"));
@@ -1093,6 +1132,10 @@ registerPrefix(
 		var mcpToggle = S.$("mcpToggleBtn");
 		if (mcpToggle) mcpToggle.addEventListener("click", toggleMcp);
 		updateMcpToggleUI(true); // default: MCP enabled
+
+		var thinkToggle = S.$("thinkToggleBtn");
+		if (thinkToggle) thinkToggle.addEventListener("click", toggleThink);
+		updateThinkToggleUI(false); // default: thinking disabled
 
 		var toolbar = container.querySelector(".chat-toolbar");
 		var mobileControlsBtn = S.$("mobileControlsBtn");

@@ -2,6 +2,11 @@ use std::pin::Pin;
 
 use {async_trait::async_trait, tokio_stream::Stream};
 
+tokio::task_local! {
+    /// Per-request thinking budget (0 = disabled). Set by chat crate, read by providers.
+    pub static THINKING_BUDGET: u32;
+}
+
 use crate::multimodal::parse_data_uri;
 
 // ── Typed chat messages ─────────────────────────────────────────────────────
@@ -386,6 +391,12 @@ pub trait LlmProvider: Send + Sync {
     fn supports_vision(&self) -> bool {
         false
     }
+
+    /// Set the thinking budget for the next request.
+    ///
+    /// Only meaningful for providers that support extended thinking (e.g. Anthropic).
+    /// Default implementation is a no-op.
+    fn set_thinking_budget(&self, _budget: Option<u32>) {}
 
     /// Stream a completion, yielding delta/done/error events.
     fn stream(

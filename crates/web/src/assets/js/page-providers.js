@@ -221,6 +221,17 @@ function cycleTrustPill(modelId, field) {
 			if (!updated[overrideKey]) updated[overrideKey] = {};
 			updated[overrideKey] = { ...updated[overrideKey], [field]: next };
 			modelOverrides.value = updated;
+			// Sync to active session so the chat toolbar reflects the change
+			var selected = (S.selectedModelId || "").split("::").pop();
+			if (selected && selected.toLowerCase() === overrideKey.toLowerCase()) {
+				if (field === "mcp_enabled") {
+					sendRpc("sessions.patch", { key: S.activeSessionKey, mcpDisabled: !next });
+				} else if (field === "sandbox_enabled") {
+					sendRpc("sessions.patch", { key: S.activeSessionKey, sandboxEnabled: next });
+				} else if (field === "thinking_enabled") {
+					sendRpc("sessions.patch", { key: S.activeSessionKey, thinkingEnabled: next });
+				}
+			}
 		}
 	});
 }
@@ -332,6 +343,7 @@ function ProviderSection(props) {
 									<${TrustPill} label="MCP" value=${getModelOverrideValues(model.id)?.mcp_enabled ?? false} onCycle=${() => cycleTrustPill(model.id, "mcp_enabled")} />
 									<${TrustPill} label="Sandbox" value=${getModelOverrideValues(model.id)?.sandbox_enabled ?? false} onCycle=${() => cycleTrustPill(model.id, "sandbox_enabled")} />
 									<${TrustPill} label="Lazy" value=${getModelOverrideValues(model.id)?.lazy_tools ?? false} onCycle=${() => cycleTrustPill(model.id, "lazy_tools")} />
+									<${TrustPill} label="Think" value=${getModelOverrideValues(model.id)?.thinking_enabled ?? null} onCycle=${() => cycleTrustPill(model.id, "thinking_enabled")} />
 								</div>
 							</div>
 							<button class="provider-btn provider-btn-secondary provider-btn-sm" onClick=${() => onToggleModel(model)}>

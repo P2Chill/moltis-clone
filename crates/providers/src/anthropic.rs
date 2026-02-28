@@ -298,6 +298,19 @@ impl LlmProvider for AnthropicProvider {
             body["tools"] = serde_json::Value::Array(to_anthropic_tools(tools));
         }
 
+        let thinking_budget = moltis_agents::model::THINKING_BUDGET.try_with(|b| *b).unwrap_or(0);
+        if thinking_budget > 0 {
+            body["thinking"] = serde_json::json!({
+                "type": "enabled",
+                "budget_tokens": thinking_budget,
+            });
+            // Anthropic requires max_tokens >= budget_tokens for thinking models
+            let min_max = (thinking_budget + 16384) as u64;
+            if body["max_tokens"].as_u64().unwrap_or(0) < min_max {
+                body["max_tokens"] = serde_json::json!(min_max);
+            }
+        }
+
         debug!(
             model = %self.model,
             messages_count = anthropic_messages.len(),
@@ -322,7 +335,15 @@ impl LlmProvider for AnthropicProvider {
             .header("content-type", "application/json")
             .header(
                 "anthropic-beta",
-                if self.use_bearer { "oauth-2025-04-20" } else { "" },
+                {
+                    let mut beta = String::new();
+                    if self.use_bearer { beta.push_str("oauth-2025-04-20"); }
+                    if thinking_budget > 0 {
+                        if !beta.is_empty() { beta.push_str(","); }
+                        beta.push_str("interleaved-thinking-2025-05-14");
+                    }
+                    beta
+                },
             )
             .json(&body)
             .send()
@@ -410,6 +431,19 @@ impl LlmProvider for AnthropicProvider {
                 body["tools"] = serde_json::Value::Array(to_anthropic_tools(&tools));
             }
 
+            let thinking_budget = moltis_agents::model::THINKING_BUDGET.try_with(|b| *b).unwrap_or(0);
+
+            if thinking_budget > 0 {
+                body["thinking"] = serde_json::json!({
+                    "type": "enabled",
+                    "budget_tokens": thinking_budget,
+                });
+                let min_max = (thinking_budget + 16384) as u64;
+                if body["max_tokens"].as_u64().unwrap_or(0) < min_max {
+                    body["max_tokens"] = serde_json::json!(min_max);
+                }
+            }
+
             debug!(
                 model = %self.model,
                 messages_count = anthropic_messages.len(),
@@ -432,7 +466,15 @@ impl LlmProvider for AnthropicProvider {
                 )
                 .header("anthropic-version", "2023-06-01")
                 .header("content-type", "application/json")
-                .header("anthropic-beta", if self.use_bearer { "oauth-2025-04-20" } else { "" })
+                .header("anthropic-beta", {
+                    let mut beta = String::new();
+                    if self.use_bearer { beta.push_str("oauth-2025-04-20"); }
+                    if thinking_budget > 0 {
+                        if !beta.is_empty() { beta.push_str(","); }
+                        beta.push_str("interleaved-thinking-2025-05-14");
+                    }
+                    beta
+                })
                 .json(&body)
                 .send()
                 .await
@@ -490,7 +532,9 @@ impl LlmProvider for AnthropicProvider {
                                         let content_block = &evt["content_block"];
                                         let block_type = content_block["type"].as_str().unwrap_or("");
 
-                                        if block_type == "tool_use" {
+                                        if block_type == "thinking" {
+                                            // Track thinking block — deltas will emit ReasoningDelta
+                                        } else if block_type == "tool_use" {
                                             let id = content_block["id"].as_str().unwrap_or("").to_string();
                                             let name = content_block["name"].as_str().unwrap_or("").to_string();
                                             current_block_index = Some(index);
@@ -501,7 +545,13 @@ impl LlmProvider for AnthropicProvider {
                                         let delta = &evt["delta"];
                                         let delta_type = delta["type"].as_str().unwrap_or("");
 
-                                        if delta_type == "text_delta" {
+                                        if delta_type == "thinking_delta" {
+                                            if let Some(text) = delta["thinking"].as_str() {
+                                                if !text.is_empty() {
+                                                    yield StreamEvent::ReasoningDelta(text.to_string());
+                                                }
+                                            }
+                                        } else if delta_type == "text_delta" {
                                             if let Some(text) = delta["text"].as_str() {
                                                 if !text.is_empty() {
                                                     yield StreamEvent::Delta(text.to_string());

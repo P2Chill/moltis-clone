@@ -2851,6 +2851,7 @@ pub(super) fn register(reg: &mut MethodRegistry) {
                             "mcp_enabled": v.mcp_enabled,
                             "sandbox_enabled": v.sandbox_enabled,
                             "lazy_tools": v.lazy_tools,
+                            "thinking_enabled": v.thinking_enabled,
                         });
                         (k.clone(), obj)
                     })
@@ -2875,12 +2876,15 @@ pub(super) fn register(reg: &mut MethodRegistry) {
                     .map(|v| if v.is_null() { None } else { v.as_bool() });
                 let lazy_tools: Option<Option<bool>> = ctx.params.get("lazy_tools")
                     .map(|v| if v.is_null() { None } else { v.as_bool() });
+                let thinking_enabled: Option<Option<bool>> = ctx.params.get("thinking_enabled")
+                    .map(|v| if v.is_null() { None } else { v.as_bool() });
 
                 moltis_config::update_config(|cfg| {
                     let entry = cfg.tools.model_overrides.entry(key.clone()).or_default();
                     if let Some(v) = mcp_enabled { entry.mcp_enabled = v; }
                     if let Some(v) = sandbox_enabled { entry.sandbox_enabled = v; }
                     if let Some(v) = lazy_tools { entry.lazy_tools = v; }
+                    if let Some(v) = thinking_enabled { entry.thinking_enabled = v; }
                 })
                 .map_err(|e| ErrorShape::new(error_codes::UNAVAILABLE, e.to_string()))?;
 

@@ -139,7 +139,6 @@ function handleChatThinking(p, isActive, isChatPage, eventSession) {
 	thinkEl.className = "msg assistant thinking";
 	thinkEl.id = "thinkingIndicator";
 	thinkEl.appendChild(makeThinkingDots());
-	thinkEl.appendChild(makeThinkingStopBtn(eventSession));
 	S.chatMsgBox.appendChild(thinkEl);
 	S.chatMsgBox.scrollTop = S.chatMsgBox.scrollHeight;
 }
@@ -150,13 +149,11 @@ function handleChatThinkingText(p, isActive, isChatPage, eventSession) {
 	if (!(isActive && isChatPage)) return;
 	var indicator = document.getElementById("thinkingIndicator");
 	if (indicator) {
-		var existingBtn = indicator.querySelector(".thinking-stop-btn");
 		while (indicator.firstChild) indicator.removeChild(indicator.firstChild);
 		var textEl = document.createElement("span");
 		textEl.className = "thinking-text";
 		textEl.textContent = p.text;
 		indicator.appendChild(textEl);
-		indicator.appendChild(existingBtn || makeThinkingStopBtn(eventSession));
 		S.chatMsgBox.scrollTop = S.chatMsgBox.scrollHeight;
 	}
 }

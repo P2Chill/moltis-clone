@@ -1826,6 +1826,9 @@ pub struct ToolPolicyConfig {
     /// Override lazy tool loading for models matching this key.
     #[serde(default)]
     pub lazy_tools: Option<bool>,
+    /// Override extended thinking for models matching this key.
+    #[serde(default)]
+    pub thinking_enabled: Option<bool>,
 }
 
 /// OAuth provider configuration (e.g. openai-codex).

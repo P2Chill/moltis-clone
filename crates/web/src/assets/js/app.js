@@ -110,11 +110,19 @@ onEvent("update.available", showUpdateBanner);
 initUpdateBannerDismiss();
 showVaultBanner(gon.get("vault_status"));
 gon.onChange("vault_status", showVaultBanner);
+// Debounce session events to avoid feedback loops when multiple tabs are open.
+// Each resolve/patch can emit a session event, so without debouncing, N tabs
+// create an N-fold amplification loop.
+var _sessionDebounce = null;
 onEvent("session", (payload) => {
-	fetchSessions();
-	if (payload && payload.kind === "patched" && payload.sessionKey === S.activeSessionKey) {
-		refreshActiveSession();
-	}
+	if (_sessionDebounce) clearTimeout(_sessionDebounce);
+	_sessionDebounce = setTimeout(() => {
+		_sessionDebounce = null;
+		fetchSessions();
+		if (payload && payload.kind === "patched" && payload.sessionKey === S.activeSessionKey) {
+			refreshActiveSession();
+		}
+	}, 300);
 });
 
 function applyMemory(mem) {
