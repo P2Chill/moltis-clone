@@ -285,6 +285,10 @@ pub fn memory_path() -> PathBuf {
     data_dir().join("MEMORY.md")
 }
 
+pub fn profile_path() -> PathBuf {
+    data_dir().join("PROFILE.md")
+}
+
 /// Load identity values from `IDENTITY.md` frontmatter if present.
 pub fn load_identity() -> Option<AgentIdentity> {
     let path = identity_path();
@@ -420,6 +424,14 @@ pub fn load_heartbeat_md() -> Option<String> {
 /// Load MEMORY.md from the workspace root (`data_dir`) if present and non-empty.
 pub fn load_memory_md() -> Option<String> {
     load_workspace_markdown(memory_path())
+}
+
+/// Load PROFILE.md from the workspace root (`data_dir`) if present and non-empty.
+///
+/// `PROFILE.md` holds stable identity facts (name, language, domain, key preferences)
+/// and is always injected in full, independently of `MEMORY.md`.
+pub fn load_profile_md() -> Option<String> {
+    load_workspace_markdown(profile_path())
 }
 
 /// Persist SOUL.md in the workspace root (`data_dir`).

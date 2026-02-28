@@ -1007,6 +1007,7 @@ struct PromptPersona {
     agents_text: Option<String>,
     tools_text: Option<String>,
     memory_text: Option<String>,
+    profile_text: Option<String>,
 }
 
 /// Load identity, user profile, soul, and workspace text from config + data files.
@@ -1044,6 +1045,7 @@ fn load_prompt_persona() -> PromptPersona {
         agents_text: moltis_config::load_agents_md(),
         tools_text: moltis_config::load_tools_md(),
         memory_text: moltis_config::load_memory_md(),
+        profile_text: moltis_config::load_profile_md(),
     }
 }
 
@@ -1266,7 +1268,21 @@ fn apply_runtime_tool_filters(
     mcp_disabled: bool,
     model_id: Option<&str>,
 ) -> ToolRegistry {
-    let base_registry = if mcp_disabled {
+    // Resolve effective MCP disabled: model override takes priority over session flag.
+    let effective_mcp_disabled = model_id
+        .and_then(|mid| {
+            let mid_lower = mid.to_lowercase();
+            config.tools.model_overrides.iter().find_map(|(key, ov)| {
+                if mid_lower.contains(&key.to_lowercase()) {
+                    ov.mcp_enabled.map(|v| !v)
+                } else {
+                    None
+                }
+            })
+        })
+        .unwrap_or(mcp_disabled);
+
+    let base_registry = if effective_mcp_disabled {
         base.clone_without_mcp()
     } else {
         base.clone_without(&[])
@@ -4347,6 +4363,7 @@ impl ChatService for LiveChatService {
                 persona.tools_text.as_deref(),
                 Some(&runtime_context),
                 persona.memory_text.as_deref(),
+                persona.profile_text.as_deref(),
             )
         } else {
             build_system_prompt_minimal_runtime(
@@ -4358,6 +4375,7 @@ impl ChatService for LiveChatService {
                 persona.tools_text.as_deref(),
                 Some(&runtime_context),
                 persona.memory_text.as_deref(),
+                persona.profile_text.as_deref(),
             )
         };
 
@@ -4464,6 +4482,7 @@ impl ChatService for LiveChatService {
                 persona.tools_text.as_deref(),
                 Some(&runtime_context),
                 persona.memory_text.as_deref(),
+                persona.profile_text.as_deref(),
             )
         } else {
             build_system_prompt_minimal_runtime(
@@ -4475,6 +4494,7 @@ impl ChatService for LiveChatService {
                 persona.tools_text.as_deref(),
                 Some(&runtime_context),
                 persona.memory_text.as_deref(),
+                persona.profile_text.as_deref(),
             )
         };
 
@@ -5060,11 +5080,36 @@ async fn run_with_tools(
         }
     };
 
+    // Resolve lazy_tools for this model (same logic as runner).
+    let lazy_tools_for_prompt = {
+        let model_lower = model_id.to_lowercase();
+        persona.config.tools.model_overrides.iter()
+            .find_map(|(key, ov)| {
+                if model_lower.contains(&key.to_lowercase()) { ov.lazy_tools } else { None }
+            })
+            .unwrap_or(persona.config.tools.lazy_tools)
+    };
+
+    // When lazy loading is on, only show core tools in the system prompt.
+    // The full registry is still passed to the runner for execution.
+    let prompt_registry = if lazy_tools_for_prompt && native_tools {
+        let core = &persona.config.tools.core_tools;
+        filtered_registry.clone_allowed_by(|name| {
+            if core.is_empty() {
+                moltis_agents::LAZY_CORE_TOOLS.contains(&name)
+            } else {
+                core.iter().any(|c| c.as_str() == name)
+            }
+        })
+    } else {
+        filtered_registry.clone_without(&[])
+    };
+
     // Use a minimal prompt without tool schemas for providers that don't support tools.
     // This reduces context size and avoids confusing the LLM with unusable instructions.
     let system_prompt = if native_tools {
         build_system_prompt_with_session_runtime(
-            &filtered_registry,
+            &prompt_registry,
             native_tools,
             project_context,
             skills,
@@ -5075,6 +5120,7 @@ async fn run_with_tools(
             persona.tools_text.as_deref(),
             runtime_context,
             persona.memory_text.as_deref(),
+            persona.profile_text.as_deref(),
         )
     } else {
         // Minimal prompt without tools for local LLMs
@@ -5087,6 +5133,7 @@ async fn run_with_tools(
             persona.tools_text.as_deref(),
             runtime_context,
             persona.memory_text.as_deref(),
+            persona.profile_text.as_deref(),
         )
     };
 
@@ -5095,11 +5142,23 @@ async fn run_with_tools(
     let system_prompt =
         apply_voice_reply_suffix(system_prompt, desired_reply_medium, runtime_context);
 
-    // Determine sandbox mode for this session.
-    let session_is_sandboxed = if let Some(router) = state.sandbox_router() {
-        router.is_sandboxed(session_key).await
-    } else {
-        false
+    // Determine sandbox mode: model override > session/global default.
+    let session_is_sandboxed = {
+        let base = if let Some(router) = state.sandbox_router() {
+            router.is_sandboxed(session_key).await
+        } else {
+            false
+        };
+        // Per-model sandbox_enabled overrides the session setting.
+        let mid_lower = model_id.to_lowercase();
+        let model_sandbox_override = persona.config.tools.model_overrides.iter().find_map(|(key, ov)| {
+            if mid_lower.contains(&key.to_lowercase()) {
+                ov.sandbox_enabled
+            } else {
+                None
+            }
+        });
+        model_sandbox_override.unwrap_or(base)
     };
 
     // Broadcast tool events to the UI in the order emitted by the runner.
@@ -5911,6 +5970,7 @@ async fn run_streaming(
         persona.tools_text.as_deref(),
         runtime_context,
         persona.memory_text.as_deref(),
+        persona.profile_text.as_deref(),
     );
 
     // Layer 1: instruct the LLM to write speech-friendly output when voice is active.
