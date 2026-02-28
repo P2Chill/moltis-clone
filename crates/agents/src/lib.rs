@@ -6,6 +6,7 @@ pub mod model;
 pub mod multimodal;
 pub mod prompt;
 pub mod runner;
+pub use runner::LAZY_CORE_TOOLS;
 pub use {
     model::{ChatMessage, ContentPart, UserContent},
     runner::AgentRunError,

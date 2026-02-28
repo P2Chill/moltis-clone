@@ -1613,6 +1613,15 @@ pub struct ToolPolicyConfig {
     pub allow: Vec<String>,
     pub deny: Vec<String>,
     pub profile: Option<String>,
+    /// Override MCP-enabled for models matching this key.
+    #[serde(default)]
+    pub mcp_enabled: Option<bool>,
+    /// Override sandbox-enabled for models matching this key.
+    #[serde(default)]
+    pub sandbox_enabled: Option<bool>,
+    /// Override lazy tool loading for models matching this key.
+    #[serde(default)]
+    pub lazy_tools: Option<bool>,
 }
 
 /// OAuth provider configuration (e.g. openai-codex).

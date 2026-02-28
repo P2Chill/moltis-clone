@@ -115,7 +115,7 @@ const RATE_LIMIT_MAX_RETRIES: u8 = 10;
 
 /// Default set of tool names always injected when lazy tool loading is enabled.
 /// All other tools require discovery via `discover_tools`.
-const LAZY_CORE_TOOLS: &[&str] = &[
+pub const LAZY_CORE_TOOLS: &[&str] = &[
     "discover_tools",
     "exec",
     "memory_search",
@@ -857,7 +857,21 @@ pub async fn run_agent_loop_with_context(
     let max_tool_result_bytes = config.tools.max_tool_result_bytes;
     let max_iterations = resolve_agent_max_iterations(config.tools.agent_max_iterations);
     let tool_schemas = tools.list_schemas();
-    let lazy_tools = config.tools.lazy_tools;
+    let lazy_tools = {
+        let model_id = provider.id().to_lowercase();
+        config
+            .tools
+            .model_overrides
+            .iter()
+            .find_map(|(key, ov)| {
+                if model_id.contains(&key.to_lowercase()) {
+                    ov.lazy_tools
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(config.tools.lazy_tools)
+    };
 
     let is_multimodal = matches!(user_content, UserContent::Multimodal(_));
     info!(
@@ -1351,7 +1365,21 @@ pub async fn run_agent_loop_streaming(
     let max_tool_result_bytes = config.tools.max_tool_result_bytes;
     let max_iterations = resolve_agent_max_iterations(config.tools.agent_max_iterations);
     let tool_schemas = tools.list_schemas();
-    let lazy_tools = config.tools.lazy_tools;
+    let lazy_tools = {
+        let model_id = provider.id().to_lowercase();
+        config
+            .tools
+            .model_overrides
+            .iter()
+            .find_map(|(key, ov)| {
+                if model_id.contains(&key.to_lowercase()) {
+                    ov.lazy_tools
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(config.tools.lazy_tools)
+    };
 
     let is_multimodal = matches!(user_content, UserContent::Multimodal(_));
     info!(
