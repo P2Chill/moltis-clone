@@ -17,6 +17,8 @@ pub struct AnthropicProvider {
     client: &'static reqwest::Client,
     /// Optional alias for metrics differentiation (e.g., "anthropic-work", "anthropic-2").
     alias: Option<String>,
+    /// Use Bearer auth (Claude OAuth) instead of x-api-key header.
+    use_bearer: bool,
 }
 
 impl AnthropicProvider {
@@ -27,6 +29,7 @@ impl AnthropicProvider {
             base_url,
             client: crate::shared_http_client(),
             alias: None,
+            use_bearer: false,
         }
     }
 
@@ -43,6 +46,23 @@ impl AnthropicProvider {
             base_url,
             client: crate::shared_http_client(),
             alias,
+            use_bearer: false,
+        }
+    }
+
+    pub fn with_alias_bearer(
+        token: secrecy::Secret<String>,
+        model: String,
+        base_url: String,
+        alias: Option<String>,
+    ) -> Self {
+        Self {
+            api_key: token,
+            model,
+            base_url,
+            client: crate::shared_http_client(),
+            alias,
+            use_bearer: true,
         }
     }
 }
@@ -267,7 +287,10 @@ impl LlmProvider for AnthropicProvider {
         let http_resp = self
             .client
             .post(format!("{}/v1/messages", self.base_url))
-            .header("x-api-key", self.api_key.expose_secret())
+            .header(
+                    if self.use_bearer { "Authorization" } else { "x-api-key" },
+                    if self.use_bearer { format!("Bearer {}", self.api_key.expose_secret()) } else { self.api_key.expose_secret().to_string() },
+                )
             .header("anthropic-version", "2023-06-01")
             .header("content-type", "application/json")
             .json(&body)
@@ -368,7 +391,10 @@ impl LlmProvider for AnthropicProvider {
             let resp = match self
                 .client
                 .post(format!("{}/v1/messages", self.base_url))
-                .header("x-api-key", self.api_key.expose_secret())
+                .header(
+                    if self.use_bearer { "Authorization" } else { "x-api-key" },
+                    if self.use_bearer { format!("Bearer {}", self.api_key.expose_secret()) } else { self.api_key.expose_secret().to_string() },
+                )
                 .header("anthropic-version", "2023-06-01")
                 .header("content-type", "application/json")
                 .json(&body)

@@ -94,6 +94,8 @@ export function openProviderModal() {
 			return;
 		}
 		var providers = res.payload || [];
+		// openai-codex is shown as part of the openai entry
+		providers = providers.filter((p) => p.name !== "openai-codex");
 
 		providers.sort((a, b) => {
 			var aOrder = Number.isFinite(a.uiOrder) ? a.uiOrder : Number.MAX_SAFE_INTEGER;
