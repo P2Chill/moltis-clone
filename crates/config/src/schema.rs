@@ -1225,6 +1225,11 @@ pub struct ToolsConfig {
     /// If empty, the built-in default core set is used.
     #[serde(default)]
     pub core_tools: Vec<String>,
+    /// Number of conversation turns to cache discovered tool schemas.
+    /// When `lazy_tools` is enabled, tools found via `discover_tools`
+    /// are cached for this many turns before expiring. Default 5.
+    #[serde(default = "default_discovered_tool_ttl")]
+    pub discovered_tool_ttl: u8,
 }
 
 impl Default for ToolsConfig {
@@ -1241,6 +1246,7 @@ impl Default for ToolsConfig {
             max_tool_result_bytes: default_max_tool_result_bytes(),
             lazy_tools: false,
             core_tools: Vec::new(),
+            discovered_tool_ttl: default_discovered_tool_ttl(),
         }
     }
 }
@@ -1255,6 +1261,10 @@ fn default_agent_max_iterations() -> usize {
 
 fn default_max_tool_result_bytes() -> usize {
     50_000
+}
+
+fn default_discovered_tool_ttl() -> u8 {
+    5
 }
 
 /// Map tools configuration.

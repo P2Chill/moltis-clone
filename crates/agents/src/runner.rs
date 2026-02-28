@@ -1,4 +1,4 @@
-use std::{fmt::Write, sync::Arc};
+use std::{fmt::Write, sync::{Arc, LazyLock}};
 
 use {
     anyhow::{Result, bail},
@@ -112,6 +112,34 @@ const SERVER_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(2
 const RATE_LIMIT_INITIAL_RETRY_MS: u64 = 2_000;
 const RATE_LIMIT_MAX_RETRY_MS: u64 = 60_000;
 const RATE_LIMIT_MAX_RETRIES: u8 = 10;
+
+// ── Discovered-tool cache ────────────────────────────────────────────
+// Keyed by session ID. Each entry maps tool_name → turns remaining.
+// Decremented at the start of each agent loop; expired entries are removed.
+static DISCOVERED_TOOL_CACHE: LazyLock<tokio::sync::RwLock<
+    std::collections::HashMap<String, std::collections::HashMap<String, u8>>,
+>> = LazyLock::new(|| tokio::sync::RwLock::new(std::collections::HashMap::new()));
+
+/// Tick the cache for a session: decrement TTLs and remove expired entries.
+async fn tick_discovered_cache(session_key: &str) -> Vec<String> {
+    let mut cache: tokio::sync::RwLockWriteGuard<'_, std::collections::HashMap<String, std::collections::HashMap<String, u8>>> = DISCOVERED_TOOL_CACHE.write().await;
+    let tools = cache.entry(session_key.to_string()).or_default();
+    tools.retain(|_, ttl| {
+        *ttl = ttl.saturating_sub(1);
+        *ttl > 0
+    });
+    tools.keys().cloned().collect()
+}
+
+/// Add tool names to the cache with the given TTL.
+async fn cache_discovered_tools(session_key: &str, names: &[String], ttl: u8) {
+    let mut cache: tokio::sync::RwLockWriteGuard<'_, std::collections::HashMap<String, std::collections::HashMap<String, u8>>> = DISCOVERED_TOOL_CACHE.write().await;
+    let tools = cache.entry(session_key.to_string()).or_default();
+    for name in names {
+        // Insert or refresh the TTL.
+        tools.insert(name.clone(), ttl);
+    }
+}
 
 /// Default set of tool names always injected when lazy tool loading is enabled.
 /// All other tools require discovery via `discover_tools`.
@@ -908,13 +936,34 @@ pub async fn run_agent_loop_with_context(
         vec![]
     };
 
-    // Extract session key once for hook payloads.
+    // Extract session key once for hook payloads and cache lookups.
     let session_key_for_hooks = tool_context
         .as_ref()
         .and_then(|ctx| ctx.get("_session_key"))
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
+
+    // When lazy_tools is on, restore cached discovered tools from previous turns.
+    let discovered_ttl = config.tools.discovered_tool_ttl;
+    if lazy_tools && !session_key_for_hooks.is_empty() {
+        let cached_names = tick_discovered_cache(&session_key_for_hooks).await;
+        if !cached_names.is_empty() {
+            let mut added = 0usize;
+            for schema in &tool_schemas {
+                let name = schema.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                if cached_names.iter().any(|c| c == name)
+                    && !schemas_for_api.iter().any(|s| s.get("name").and_then(|n| n.as_str()) == Some(name))
+                {
+                    schemas_for_api.push(schema.clone());
+                    added += 1;
+                }
+            }
+            if added > 0 {
+                info!(added, cached = cached_names.len(), "restored cached discovered tools");
+            }
+        }
+    }
 
     let mut iterations = 0;
     let mut total_tool_calls = 0;
@@ -1332,7 +1381,22 @@ pub async fn run_agent_loop_with_context(
 
             // Lazy tool injection: expand schemas_for_api with discovered tools.
             if lazy_tools {
+                let before = schemas_for_api.len();
                 inject_discovered_schemas(&mut schemas_for_api, &tc.name, success, &result);
+                // Cache newly discovered tool names for subsequent turns.
+                if schemas_for_api.len() > before && !session_key_for_hooks.is_empty() {
+                    let new_names: Vec<String> = schemas_for_api[before..]
+                        .iter()
+                        .filter_map(|s| s.get("name").and_then(|n| n.as_str()).map(String::from))
+                        .collect();
+                    if !new_names.is_empty() {
+                        let sk = session_key_for_hooks.clone();
+                        let ttl = discovered_ttl;
+                        tokio::spawn(async move {
+                            cache_discovered_tools(&sk, &new_names, ttl).await;
+                        });
+                    }
+                }
             }
         }
     }
@@ -1416,20 +1480,41 @@ pub async fn run_agent_loop_streaming(
         vec![]
     };
 
-    info!(
-        native_tools,
-        schemas_for_api_count = schemas_for_api.len(),
-        tool_schemas_count = tool_schemas.len(),
-        "schemas_for_api prepared for streaming"
-    );
-
-    // Extract session key once for hook payloads.
+    // Extract session key once for hook payloads and cache lookups.
     let session_key_for_hooks = tool_context
         .as_ref()
         .and_then(|ctx| ctx.get("_session_key"))
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
+
+    // When lazy_tools is on, restore cached discovered tools from previous turns.
+    let discovered_ttl = config.tools.discovered_tool_ttl;
+    if lazy_tools && !session_key_for_hooks.is_empty() {
+        let cached_names = tick_discovered_cache(&session_key_for_hooks).await;
+        if !cached_names.is_empty() {
+            let mut added = 0usize;
+            for schema in &tool_schemas {
+                let name = schema.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                if cached_names.iter().any(|c| c == name)
+                    && !schemas_for_api.iter().any(|s| s.get("name").and_then(|n| n.as_str()) == Some(name))
+                {
+                    schemas_for_api.push(schema.clone());
+                    added += 1;
+                }
+            }
+            if added > 0 {
+                info!(added, cached = cached_names.len(), "restored cached discovered tools");
+            }
+        }
+    }
+
+    info!(
+        native_tools,
+        schemas_for_api_count = schemas_for_api.len(),
+        tool_schemas_count = tool_schemas.len(),
+        "schemas_for_api prepared for streaming"
+    );
 
     let mut iterations = 0;
     let mut total_tool_calls = 0;
@@ -1986,7 +2071,22 @@ pub async fn run_agent_loop_streaming(
 
             // Lazy tool injection: expand schemas_for_api with discovered tools.
             if lazy_tools {
+                let before = schemas_for_api.len();
                 inject_discovered_schemas(&mut schemas_for_api, &tc.name, success, &result);
+                // Cache newly discovered tool names for subsequent turns.
+                if schemas_for_api.len() > before && !session_key_for_hooks.is_empty() {
+                    let new_names: Vec<String> = schemas_for_api[before..]
+                        .iter()
+                        .filter_map(|s| s.get("name").and_then(|n| n.as_str()).map(String::from))
+                        .collect();
+                    if !new_names.is_empty() {
+                        let sk = session_key_for_hooks.clone();
+                        let ttl = discovered_ttl;
+                        tokio::spawn(async move {
+                            cache_discovered_tools(&sk, &new_names, ttl).await;
+                        });
+                    }
+                }
             }
         }
     }

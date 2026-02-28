@@ -265,9 +265,38 @@ pub fn values_to_chat_messages(values: &[serde_json::Value]) -> Vec<ChatMessage>
                 };
                 messages.push(ChatMessage::tool(tool_call_id, content));
             },
-            // tool_result entries are UI-only metadata (persisted tool execution
-            // output); they are not part of the LLM conversation context.
-            "tool_result" => continue,
+            // Reconstruct tool_result entries as assistant tool_use + tool result pairs.
+            // The persisted tool_result contains the tool_call_id, tool_name, and arguments,
+            // which lets us synthesize the assistant message that originally made the call.
+            // Without this, the model loses awareness of its own tool calls between turns.
+            "tool_result" => {
+                let tool_call_id = val["tool_call_id"].as_str().unwrap_or("").to_string();
+                let tool_name = val["tool_name"].as_str().unwrap_or("unknown").to_string();
+                let arguments = val.get("arguments")
+                    .cloned()
+                    .unwrap_or(serde_json::json!({}));
+
+                // Synthesize the assistant message that made this tool call.
+                messages.push(ChatMessage::Assistant {
+                    content: None,
+                    tool_calls: vec![ToolCall {
+                        id: tool_call_id.clone(),
+                        name: tool_name,
+                        arguments,
+                        thought_signature: None,
+                    }],
+                });
+
+                // Add the tool result message.
+                let result_content = if let Some(err) = val.get("error").and_then(|e| e.as_str()) {
+                    format!("Error: {err}")
+                } else if let Some(res) = val.get("result") {
+                    serde_json::to_string(res).unwrap_or_default()
+                } else {
+                    String::new()
+                };
+                messages.push(ChatMessage::tool(tool_call_id, result_content));
+            },
             // notice entries are UI-only informational messages.
             "notice" => continue,
             other => {
