@@ -186,7 +186,7 @@ pub async fn vault_guard(
     };
     let path = request.uri().path();
     // Allow auth, gon, and non-API routes through.
-    if !path.starts_with("/api/") || path.starts_with("/api/auth/") || path == "/api/gon" {
+    if !path.starts_with("/api/") || path.starts_with("/api/auth/") || path == "/api/gon" || path.starts_with("/api/avatar/") {
         return next.run(request).await;
     }
     // Only block when Sealed (not Uninitialized).
