@@ -1299,19 +1299,42 @@ fn apply_runtime_tool_filters(
     config: &moltis_config::MoltisConfig,
     _skills: &[moltis_skills::types::SkillMetadata],
     mcp_disabled: bool,
+    model_id: Option<&str>,
 ) -> ToolRegistry {
-    let base_registry = if mcp_disabled {
+    // Resolve effective MCP disabled: model override takes priority over session flag.
+    let effective_mcp_disabled = model_id
+        .and_then(|mid| {
+            let mid_lower = mid.to_lowercase();
+            config.tools.model_overrides.iter().find_map(|(key, ov)| {
+                if mid_lower.contains(&key.to_lowercase()) {
+                    ov.mcp_enabled.map(|v| !v)
+                } else {
+                    None
+                }
+            })
+        })
+        .unwrap_or(mcp_disabled);
+
+    let base_registry = if effective_mcp_disabled {
         base.clone_without_mcp()
     } else {
         base.clone_without(&[])
     };
 
-    let policy = effective_tool_policy(config);
-    // NOTE: Do not globally restrict tools by discovered skill `allowed_tools`.
-    // Skills are always discovered for prompt injection; applying those lists at
-    // runtime can unintentionally remove unrelated tools (for example, leaving
-    // only `web_fetch` and preventing `create_skill` from being called).
-    // Tool availability here is controlled by configured runtime policy.
+    let mut policy = effective_tool_policy(config);
+    if let Some(mid) = model_id {
+        let mid_lower = mid.to_lowercase();
+        for (key, override_policy) in &config.tools.model_overrides {
+            if mid_lower.contains(&key.to_lowercase()) {
+                let override_tp = ToolPolicy {
+                    allow: override_policy.allow.clone(),
+                    deny: override_policy.deny.clone(),
+                };
+                policy = policy.merge_with(&override_tp);
+                break;
+            }
+        }
+    }
     base_registry.clone_allowed_by(|name| policy.is_allowed(name))
 }
 
@@ -4179,7 +4202,7 @@ impl ChatService for LiveChatService {
         let tools: Vec<Value> = if supports_tools {
             let registry_guard = self.tool_registry.read().await;
             let effective_registry =
-                apply_runtime_tool_filters(&registry_guard, &config, &[], mcp_disabled);
+                apply_runtime_tool_filters(&registry_guard, &config, &[], mcp_disabled, None);
             effective_registry
                 .list_schemas()
                 .iter()
@@ -4402,6 +4425,7 @@ impl ChatService for LiveChatService {
                     &persona.config,
                     &discovered_skills,
                     mcp_disabled,
+                    None,
                 )
             } else {
                 registry_guard.clone_without(&[])
@@ -4523,6 +4547,7 @@ impl ChatService for LiveChatService {
                     &persona.config,
                     &discovered_skills,
                     mcp_disabled,
+                    None,
                 )
             } else {
                 registry_guard.clone_without(&[])
@@ -5553,7 +5578,7 @@ async fn run_with_tools(
     let mut filtered_registry = {
         let registry_guard = tool_registry.read().await;
         if native_tools {
-            apply_runtime_tool_filters(&registry_guard, &persona.config, skills, mcp_disabled)
+            apply_runtime_tool_filters(&registry_guard, &persona.config, skills, mcp_disabled, Some(model_id))
         } else {
             registry_guard.clone_without(&[])
         }
@@ -5562,11 +5587,30 @@ async fn run_with_tools(
         install_agent_scoped_memory_tools(&mut filtered_registry, manager, agent_id);
     }
 
+    // Resolve lazy_tools for this model (per-model override takes priority).
+    let lazy_tools_for_prompt = {
+        let model_lower = model_id.to_lowercase();
+        persona.config.tools.model_overrides.iter()
+            .find_map(|(key, ov)| {
+                if model_lower.contains(&key.to_lowercase()) { ov.lazy_tools } else { None }
+            })
+            .unwrap_or(persona.config.tools.lazy_tools)
+    };
+
+    // When lazy loading is on, only show core tools in the system prompt.
+    // The full registry is still passed to the runner for execution.
+    let prompt_registry = if lazy_tools_for_prompt && native_tools {
+        let core = &moltis_agents::runner::LAZY_CORE_TOOLS;
+        filtered_registry.clone_allowed_by(|name| core.contains(&name))
+    } else {
+        filtered_registry.clone_without(&[])
+    };
+
     // Use a minimal prompt without tool schemas for providers that don't support tools.
     // This reduces context size and avoids confusing the LLM with unusable instructions.
     let system_prompt = if native_tools {
         build_system_prompt_with_session_runtime(
-            &filtered_registry,
+            &prompt_registry,
             native_tools,
             project_context,
             skills,
@@ -5600,10 +5644,22 @@ async fn run_with_tools(
         apply_voice_reply_suffix(system_prompt, desired_reply_medium, runtime_context);
 
     // Determine sandbox mode for this session.
-    let session_is_sandboxed = if let Some(router) = state.sandbox_router() {
-        router.is_sandboxed(session_key).await
-    } else {
-        false
+    let session_is_sandboxed = {
+        let base = if let Some(router) = state.sandbox_router() {
+            router.is_sandboxed(session_key).await
+        } else {
+            false
+        };
+        // Per-model sandbox_enabled overrides the session setting.
+        let mid_lower = model_id.to_lowercase();
+        let model_sandbox_override = persona.config.tools.model_overrides.iter().find_map(|(key, ov)| {
+            if mid_lower.contains(&key.to_lowercase()) {
+                ov.sandbox_enabled
+            } else {
+                None
+            }
+        });
+        model_sandbox_override.unwrap_or(base)
     };
 
     // Broadcast tool events to the UI in the order emitted by the runner.
@@ -9484,7 +9540,7 @@ mod tests {
             source: None,
         }];
 
-        let filtered = apply_runtime_tool_filters(&registry, &cfg, &skills, false);
+        let filtered = apply_runtime_tool_filters(&registry, &cfg, &skills, false, None);
         assert!(filtered.get("exec").is_some());
         assert!(filtered.get("web_fetch").is_some());
         assert!(filtered.get("create_skill").is_some());
@@ -9517,7 +9573,7 @@ mod tests {
             source: None,
         }];
 
-        let filtered = apply_runtime_tool_filters(&registry, &cfg, &skills, false);
+        let filtered = apply_runtime_tool_filters(&registry, &cfg, &skills, false, None);
         assert!(filtered.get("create_skill").is_some());
         assert!(filtered.get("web_fetch").is_some());
     }
