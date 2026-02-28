@@ -1073,6 +1073,7 @@ fn load_prompt_persona_for_agent(agent_id: &str) -> PromptPersona {
         agents_text: moltis_config::load_agents_md_for_agent(agent_id),
         tools_text: moltis_config::load_tools_md_for_agent(agent_id),
         memory_text: moltis_config::load_memory_md_for_agent(agent_id),
+        profile_text: moltis_config::load_profile_md(),
     }
 }
 
@@ -5589,6 +5590,7 @@ async fn run_with_tools(
             persona.tools_text.as_deref(),
             runtime_context,
             persona.memory_text.as_deref(),
+            persona.profile_text.as_deref(),
         )
     };
 
@@ -6453,6 +6455,7 @@ async fn run_streaming(
         persona.tools_text.as_deref(),
         runtime_context,
         persona.memory_text.as_deref(),
+        persona.profile_text.as_deref(),
     );
 
     // Layer 1: instruct the LLM to write speech-friendly output when voice is active.
