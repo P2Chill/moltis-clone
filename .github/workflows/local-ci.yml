@@ -1,11 +1,13 @@
 name: Local CI (PR)
 
+# This workflow runs on pull_request events and sets commit statuses that
+# the upstream local-validation jobs poll for. Each job sets the corresponding
+# local/<check>=success status after running the actual check.
+
 on:
   pull_request:
 
-permissions:
-  statuses: write
-  contents: read
+permissions: {}
 
 env:
   NIGHTLY_TOOLCHAIN: nightly-2025-11-30
@@ -14,11 +16,14 @@ jobs:
   zizmor:
     name: Zizmor
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      statuses: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           persist-credentials: false
-      - uses: zizmorcore/zizmor-action@v0.4.1
+      - uses: zizmorcore/zizmor-action@135698455da5c3b3e55f73f4419e481ab68cdd95 # v0.4.1
         with:
           advanced-security: false
           online-audits: false
@@ -36,11 +41,14 @@ jobs:
   biome-i18n:
     name: Biome + i18n
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      statuses: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           persist-credentials: false
-      - uses: biomejs/setup-biome@v2
+      - uses: biomejs/setup-biome@29711cbb52afee00eb13aeb30636592f9edc0088 # v2
         with:
           version: "2.3.13"
       - run: biome ci crates/web/src/assets/js/
@@ -60,11 +68,14 @@ jobs:
   fmt:
     name: Format
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      statuses: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@f7ccc83f9ed1e5b9c81d8a67d7ad1a747e22a561 # master
         with:
           toolchain: ${{ env.NIGHTLY_TOOLCHAIN }}
           components: rustfmt
@@ -84,12 +95,15 @@ jobs:
     name: Clippy + Test
     needs: [fmt, biome-i18n]
     runs-on: [self-hosted, Linux, X64]
+    permissions:
+      contents: read
+      statuses: write
     container:
       image: nvidia/cuda:12.4.1-devel-ubuntu22.04
     env:
       LD_LIBRARY_PATH: /usr/local/cuda/compat:/usr/local/nvidia/lib:/usr/local/nvidia/lib64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           persist-credentials: false
       - name: Clean up corrupted cargo config
@@ -98,7 +112,7 @@ jobs:
         run: |
           apt-get update
           apt-get install -y curl git cmake build-essential clang libclang-dev pkg-config ca-certificates
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@f7ccc83f9ed1e5b9c81d8a67d7ad1a747e22a561 # master
         with:
           toolchain: ${{ env.NIGHTLY_TOOLCHAIN }}
           components: clippy
@@ -114,7 +128,7 @@ jobs:
       - id: clippy
         run: cargo clippy -Z unstable-options --workspace --all-features --all-targets -- -D warnings
         continue-on-error: true
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@f176c07a0a40cbfdd08ee9aa8bf1655701d11e69 # v2
         with:
           tool: cargo-nextest
       - id: nextest
@@ -143,6 +157,8 @@ jobs:
   skip-macos-ios:
     name: Skip macOS/iOS
     runs-on: ubuntu-latest
+    permissions:
+      statuses: write
     steps:
       - name: Set macos-app and ios-app to success (no runner)
         env:
@@ -150,5 +166,5 @@ jobs:
           SHA: ${{ github.event.pull_request.head.sha }}
           REPO: ${{ github.repository }}
         run: |
-          gh api repos/$REPO/statuses/$SHA -f state=success -f context=local/macos-app -f description="No macOS runner — skipped"
-          gh api repos/$REPO/statuses/$SHA -f state=success -f context=local/ios-app -f description="No iOS runner — skipped"
+          gh api repos/$REPO/statuses/$SHA -f state=success -f context=local/macos-app -f description="No macOS runner skipped"
+          gh api repos/$REPO/statuses/$SHA -f state=success -f context=local/ios-app -f description="No iOS runner skipped"

@@ -757,7 +757,18 @@ function vadMonitorLoop() {
 	// Debug: log RMS every ~1s
 	if (!vadMonitorLoop._lastLog || now - vadMonitorLoop._lastLog > 1000) {
 		vadMonitorLoop._lastLog = now;
-		console.debug("[voice] VAD rms:", rms.toFixed(4), "speech:", vadSpeechDetected, "muted:", vadMutedForTts, "transcribing:", vadTranscribing, "ctx:", vadAudioCtx?.state);
+		console.debug(
+			"[voice] VAD rms:",
+			rms.toFixed(4),
+			"speech:",
+			vadSpeechDetected,
+			"muted:",
+			vadMutedForTts,
+			"transcribing:",
+			vadTranscribing,
+			"ctx:",
+			vadAudioCtx?.state,
+		);
 	}
 
 	if (rms > VAD_SPEECH_THRESHOLD) {
@@ -887,11 +898,9 @@ function onTtsPause(e) {
 				if (vadBtn) vadBtn.classList.add("vad-listening");
 			}
 		}, 400);
-	} else {
+	} else if (!isAnyAudioPlaying()) {
 		// Manual pause mid-playback — only unmute if nothing else is playing
-		if (!isAnyAudioPlaying()) {
-			vadMutedForTts = false;
-		}
+		vadMutedForTts = false;
 	}
 }
 
