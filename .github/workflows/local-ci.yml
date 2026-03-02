@@ -116,6 +116,10 @@ jobs:
         with:
           toolchain: ${{ env.NIGHTLY_TOOLCHAIN }}
           components: clippy
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2
+        with:
+          shared-key: local-ci-v1
+          cache-all-crates: true
       - name: Initialize git repo in llama-cpp source
         run: |
           cargo fetch --locked
