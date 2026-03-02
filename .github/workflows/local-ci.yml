@@ -152,13 +152,13 @@ jobs:
           SHA: ${{ github.event.pull_request.head.sha }}
           REPO: ${{ github.repository }}
         run: |
-          CLIPPY_STATE=$([[ "$CLIPPY_OUTCOME" == "success" ]] && echo "success" || echo "failure")
-          TEST_STATE=$([[ "$NEXTEST_OUTCOME" == "success" ]] && echo "success" || echo "failure")
-          curl -sf -X POST "https://api.github.com/repos/$REPO/statuses/$SHA" \
+          if [ "$CLIPPY_OUTCOME" = "success" ]; then CLIPPY_STATE=success; else CLIPPY_STATE=failure; fi
+          if [ "$NEXTEST_OUTCOME" = "success" ]; then TEST_STATE=success; else TEST_STATE=failure; fi
+          curl -s -X POST "https://api.github.com/repos/$REPO/statuses/$SHA" \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
             -d "{\"state\":\"$CLIPPY_STATE\",\"context\":\"local/lint\",\"description\":\"Clippy lint\"}"
-          curl -sf -X POST "https://api.github.com/repos/$REPO/statuses/$SHA" \
+          curl -s -X POST "https://api.github.com/repos/$REPO/statuses/$SHA" \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
             -d "{\"state\":\"$TEST_STATE\",\"context\":\"local/test\",\"description\":\"cargo nextest\"}"
