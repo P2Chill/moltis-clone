@@ -88,6 +88,20 @@ impl AnthropicProvider {
         });
         token.unwrap_or_else(|| self.api_key.expose_secret().to_string())
     }
+
+    /// Whether this model should use adaptive thinking on the OAuth path.
+    ///
+    /// Newer Claude generations (4.6, 4.7, Opus 4.8, and the 5-family) only
+    /// stream `thinking_delta` events in `adaptive` mode — explicit `enabled`
+    /// mode stays silent even with `display: summarized`. Gate adaptive
+    /// thinking on those families so their reasoning streams to the UI.
+    fn uses_adaptive_thinking(&self) -> bool {
+        self.use_bearer
+            && (self.model.contains("4-6")
+                || self.model.contains("4-7")
+                || self.model.contains("4-8")
+                || self.model.contains("sonnet-5"))
+    }
 }
 
 
@@ -321,7 +335,7 @@ impl LlmProvider for AnthropicProvider {
         // Claude 4.6+ OAuth path: always use adaptive thinking. Opus 4.7 does
         // NOT stream thinking_delta events in explicit `enabled` mode even with
         // `display: summarized` - only adaptive mode streams thinking.
-        if self.use_bearer && (self.model.contains("4-6") || self.model.contains("4-7")) {
+        if self.uses_adaptive_thinking() {
             body["thinking"] = serde_json::json!({"type": "adaptive", "display": "summarized"});
             body["max_tokens"] = serde_json::json!(16384);
         } else if thinking_budget > 0 {
@@ -471,7 +485,7 @@ impl LlmProvider for AnthropicProvider {
             // Claude 4.6+ OAuth: always use adaptive thinking. Explicit enabled
             // mode with budget_tokens does NOT stream thinking_delta events on
             // Opus 4.7, even with display: summarized. Only adaptive mode streams.
-            if self.use_bearer && (self.model.contains("4-6") || self.model.contains("4-7")) {
+            if self.uses_adaptive_thinking() {
                 body["thinking"] = serde_json::json!({"type": "adaptive", "display": "summarized"});
                 body["max_tokens"] = serde_json::json!(16384);
             } else if thinking_budget > 0 {

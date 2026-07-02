@@ -745,6 +745,7 @@ pub struct ModelInfo {
 /// Known Anthropic Claude models (model_id, display_name).
 /// Current models listed first, then legacy models.
 const ANTHROPIC_MODELS: &[(&str, &str)] = &[
+    ("claude-sonnet-5", "Claude Sonnet 5"),
     ("claude-opus-4-6", "Claude Opus 4.6"),
     ("claude-opus-4-7", "Claude Opus 4.7"),
     ("claude-sonnet-4-6", "Claude Sonnet 4.6"),
