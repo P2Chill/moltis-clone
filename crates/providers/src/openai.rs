@@ -1766,7 +1766,7 @@ mod tests {
     }
 
     #[test]
-    fn merge_with_fallback_uses_discovered_models_when_live_fetch_succeeds() {
+    fn merge_with_fallback_appends_missing_defaults_after_live_fetch() {
         use crate::DiscoveredModel;
         let discovered = vec![
             DiscoveredModel::new("gpt-5.2", "GPT-5.2"),
@@ -1780,7 +1780,7 @@ mod tests {
 
         let merged = crate::merge_discovered_with_fallback_catalog(discovered, fallback);
         let ids: Vec<String> = merged.into_iter().map(|m| m.id).collect();
-        assert_eq!(ids, vec!["gpt-5.2", "zeta-model", "alpha-model"]);
+        assert_eq!(ids, vec!["gpt-5.2", "zeta-model", "alpha-model", "gpt-4o"]);
     }
 
     #[test]

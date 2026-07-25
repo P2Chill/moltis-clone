@@ -26,15 +26,21 @@ pub struct OpenAiCodexProvider {
 }
 
 const CODEX_MODELS_ENDPOINT: &str = "https://chatgpt.com/backend-api/codex/models";
-const CODEX_MODELS_CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+/// Report a Codex-compatible version so the backend does not filter out models
+/// whose `minimal_client_version` is newer than Moltis's unrelated crate version.
+///
+/// Do not replace this with `env!("CARGO_PKG_VERSION")`: Moltis and Codex use
+/// independent version schemes.
+const CODEX_MODELS_CLIENT_VERSION: &str = "1.0.0";
 
 const DEFAULT_CODEX_MODELS: &[(&str, &str)] = &[
+    ("gpt-5.6-sol", "GPT-5.6 Sol"),
+    ("gpt-5.6-terra", "GPT-5.6 Terra"),
+    ("gpt-5.6-luna", "GPT-5.6 Luna"),
     ("gpt-5.5", "GPT-5.5"),
     ("gpt-5.4", "GPT-5.4"),
     ("gpt-5.4-mini", "GPT-5.4 Mini"),
-    ("gpt-5.3-codex", "GPT-5.3 Codex"),
     ("gpt-5.3-codex-spark", "GPT-5.3 Codex Spark"),
-    ("gpt-5.2", "GPT-5.2"),
 ];
 
 impl OpenAiCodexProvider {
@@ -428,6 +434,14 @@ fn is_likely_model_id(model_id: &str) -> bool {
 
 fn parse_model_entry(entry: &serde_json::Value) -> Option<super::DiscoveredModel> {
     let obj = entry.as_object()?;
+    if obj
+        .get("visibility")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|visibility| visibility.eq_ignore_ascii_case("hide"))
+    {
+        return None;
+    }
+
     let model_id = obj
         .get("id")
         .or_else(|| obj.get("slug"))
@@ -543,11 +557,12 @@ fn fetch_models_blocking(
 }
 
 fn load_access_token_and_account_id() -> anyhow::Result<(String, String)> {
-    let tokens = TokenStore::new()
-        .load("openai-codex")
-        .or_else(load_codex_cli_tokens)
+    // Match request authentication: prefer the token kept fresh by Codex CLI
+    // over a potentially stale copy in Moltis's own token store.
+    let tokens = load_codex_cli_tokens()
+        .or_else(|| TokenStore::new().load("openai-codex"))
         .ok_or_else(|| {
-            debug!("openai-codex tokens not found in token store or codex CLI auth");
+            debug!("openai-codex tokens not found in codex CLI auth or token store");
             anyhow::anyhow!("openai-codex tokens not found")
         })?;
 
@@ -1284,6 +1299,27 @@ mod tests {
     }
 
     #[test]
+    fn client_version_is_codex_compatible() {
+        assert_eq!(
+            CODEX_MODELS_CLIENT_VERSION, "1.0.0",
+            "validate any replacement against the Codex models endpoint"
+        );
+    }
+
+    #[test]
+    fn default_codex_models_match_current_cli_lineup() {
+        assert_eq!(DEFAULT_CODEX_MODELS, &[
+            ("gpt-5.6-sol", "GPT-5.6 Sol"),
+            ("gpt-5.6-terra", "GPT-5.6 Terra"),
+            ("gpt-5.6-luna", "GPT-5.6 Luna"),
+            ("gpt-5.5", "GPT-5.5"),
+            ("gpt-5.4", "GPT-5.4"),
+            ("gpt-5.4-mini", "GPT-5.4 Mini"),
+            ("gpt-5.3-codex-spark", "GPT-5.3 Codex Spark"),
+        ]);
+    }
+
+    #[test]
     fn parse_models_payload_from_models_array() {
         let value = serde_json::json!({
             "models": [
@@ -1296,6 +1332,27 @@ mod tests {
         assert_eq!(models[0].id, "gpt-5.3");
         assert_eq!(models[0].display_name, "GPT-5.3");
         assert_eq!(models[1].id, "gpt-5.2-codex");
+    }
+
+    #[test]
+    fn parse_models_payload_excludes_hidden_models() {
+        let value = serde_json::json!({
+            "models": [
+                {
+                    "slug": "gpt-5.6-sol",
+                    "display_name": "GPT-5.6 Sol",
+                    "visibility": "list"
+                },
+                {
+                    "slug": "codex-auto-review",
+                    "display_name": "Codex Auto Review",
+                    "visibility": "hide"
+                }
+            ]
+        });
+        let models = parse_models_payload(&value);
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id, "gpt-5.6-sol");
     }
 
     #[test]

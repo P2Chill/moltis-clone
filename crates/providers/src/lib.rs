@@ -2385,7 +2385,7 @@ mod tests {
     }
 
     #[test]
-    fn merge_discovered_with_fallback_keeps_discovered_when_non_empty() {
+    fn merge_discovered_with_fallback_appends_missing_fallbacks() {
         let merged = merge_discovered_with_fallback_catalog(
             vec![
                 DiscoveredModel::new("live-a", "Live A"),
@@ -2398,7 +2398,7 @@ mod tests {
         );
 
         let ids: Vec<&str> = merged.iter().map(|m| m.id.as_str()).collect();
-        assert_eq!(ids, vec!["live-a", "live-b"]);
+        assert_eq!(ids, vec!["live-a", "live-b", "fallback-only"]);
     }
 
     #[test]
