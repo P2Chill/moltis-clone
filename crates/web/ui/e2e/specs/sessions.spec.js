@@ -602,4 +602,73 @@ test.describe("Session management", () => {
 
 		expect(pageErrors).toEqual([]);
 	});
+
+	test("session sandbox choice stays separate from model policy", async ({ page }) => {
+		const pageErrors = await navigateAndWait(page, "/chats/main");
+		await waitForWsConnected(page);
+
+		const initialResponse = await expectRpcOk(page, "sessions.resolve", { key: "main" });
+		const initialEntry = initialResponse.payload.entry || initialResponse.payload;
+		const modelId = "e2e-sandbox-policy-regression";
+
+		const beforeResponse = await expectRpcOk(page, "tools.model_overrides.get", {});
+		expect(beforeResponse.payload?.overrides?.[modelId]).toBeUndefined();
+
+		try {
+			// Applying a model policy must not overwrite an explicit session
+			// choice, even when the model has no sandbox override.
+			await expectRpcOk(page, "sessions.patch", {
+				key: "main",
+				sandboxEnabled: true,
+			});
+			await page.reload();
+			await waitForWsConnected(page);
+			await expect(page.locator("#sandboxLabel")).toHaveText("sandboxed");
+
+			await page.evaluate(async (testModelId) => {
+				const appScript = document.querySelector('script[type="module"][src*="js/app.js"]');
+				const appUrl = new URL(appScript.src, window.location.origin);
+				const prefix = appUrl.href.slice(0, appUrl.href.length - "js/app.js".length);
+				const models = await import(`${prefix}js/models.js`);
+				models.applyModelOverrides(testModelId);
+				await new Promise((resolve) => setTimeout(resolve, 500));
+			}, modelId);
+			const afterApply = await expectRpcOk(page, "sessions.resolve", { key: "main" });
+			expect((afterApply.payload.entry || afterApply.payload).sandbox_enabled).toBe(true);
+
+			// A toolbar toggle is session-only and must not rewrite the
+			// model-wide policy shown on the LLMs settings page.
+			await expectRpcOk(page, "sessions.patch", {
+				key: "main",
+				sandboxEnabled: false,
+			});
+			await page.reload();
+			await waitForWsConnected(page);
+			await expect(page.locator("#sandboxLabel")).toHaveText("direct");
+			await page.evaluate(async (testModelId) => {
+				const appScript = document.querySelector('script[type="module"][src*="js/app.js"]');
+				const appUrl = new URL(appScript.src, window.location.origin);
+				const prefix = appUrl.href.slice(0, appUrl.href.length - "js/app.js".length);
+				const state = await import(`${prefix}js/state.js`);
+				state.setSelectedModelId(testModelId);
+			}, modelId);
+			await page.locator("#sandboxToggle").click();
+			await expect
+				.poll(async () => {
+					const response = await sendRpcFromPage(page, "sessions.resolve", { key: "main" });
+					return (response.payload.entry || response.payload).sandbox_enabled;
+				})
+				.toBe(true);
+
+			const afterResponse = await expectRpcOk(page, "tools.model_overrides.get", {});
+			expect(afterResponse.payload?.overrides?.[modelId]).toBeUndefined();
+		} finally {
+			await sendRpcFromPage(page, "sessions.patch", {
+				key: "main",
+				sandboxEnabled: initialEntry.sandbox_enabled ?? null,
+			});
+		}
+
+		expect(pageErrors).toEqual([]);
+	});
 });

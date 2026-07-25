@@ -745,6 +745,7 @@ pub struct ModelInfo {
 /// Known Anthropic Claude models (model_id, display_name).
 /// Current models listed first, then legacy models.
 const ANTHROPIC_MODELS: &[(&str, &str)] = &[
+    ("claude-opus-5", "Claude Opus 5"),
     ("claude-sonnet-5", "Claude Sonnet 5"),
     ("claude-opus-4-6", "Claude Opus 4.6"),
     ("claude-opus-4-7", "Claude Opus 4.7"),
@@ -2422,6 +2423,15 @@ mod tests {
         assert!(!ZAI_MODELS.is_empty());
         assert!(!MOONSHOT_MODELS.is_empty());
         assert!(!GEMINI_MODELS.is_empty());
+    }
+
+    #[test]
+    fn anthropic_catalog_includes_opus_5() {
+        assert!(
+            ANTHROPIC_MODELS
+                .iter()
+                .any(|(id, name)| *id == "claude-opus-5" && *name == "Claude Opus 5")
+        );
     }
 
     #[test]

@@ -87,6 +87,16 @@ export function updateSandboxUI(enabled) {
 	}
 }
 
+/** Refresh the effective route computed by the backend policy layers. */
+export function refreshSandboxFromContext() {
+	return sendRpc("chat.context", {}).then((res) => {
+		if (res?.ok && res.payload?.sandbox) {
+			updateSandboxUI(res.payload.sandbox.enabled === true);
+		}
+		return res;
+	});
+}
+
 export function bindSandboxToggleEvents() {
 	if (!S.sandboxToggleBtn) return;
 	S.sandboxToggleBtn.addEventListener("click", () => {
@@ -100,12 +110,6 @@ export function bindSandboxToggleEvents() {
 				updateSandboxUI(res.result.sandbox_enabled);
 			} else {
 				updateSandboxUI(newVal);
-			}
-			// Persist to model override config so LLMs tab stays in sync
-			var modelId = S.selectedModelId;
-			if (modelId) {
-				var overrideKey = modelId.split("::").pop();
-				sendRpc("tools.model_overrides.set", { key: overrideKey, sandbox_enabled: newVal });
 			}
 		});
 	});

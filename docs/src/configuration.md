@@ -89,6 +89,25 @@ packages = [
 When you modify the packages list and restart, Moltis automatically rebuilds the sandbox image with a new tag.
 ```
 
+### Shell execution environment
+
+`/sh` and the `exec` tool use `/bin/sh -c`; they do not start an interactive or
+login shell and do not source `.profile` or `.bashrc`. Direct host execution
+inherits the gateway's environment and deterministically adds `~/.local/bin`,
+`~/bin`, and `~/.cargo/bin` to `PATH`, so conventional user-installed CLIs work
+when Moltis is launched by systemd or another non-login process.
+
+Sandboxed commands retain the sandbox's isolated `HOME`, filesystem, and `PATH`.
+An explicit per-session `/sandbox on|off` choice takes priority over model
+defaults. The mode displayed in the UI is the same effective mode used by tools.
+
+Long-running shell commands can use a larger default:
+
+```toml
+[tools.exec]
+default_timeout_secs = 300
+```
+
 ## Web Search
 
 Configure the built-in `web_search` tool:
@@ -185,6 +204,7 @@ Connect to Model Context Protocol servers:
 [mcp.servers.filesystem]
 command = "npx"
 args = ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allowed"]
+request_timeout_secs = 60        # Raise for long-running MCP tools
 
 [mcp.servers.github]
 command = "npx"

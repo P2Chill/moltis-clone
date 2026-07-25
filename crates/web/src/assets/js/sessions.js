@@ -26,12 +26,12 @@ import {
 	toolCallSummary,
 } from "./helpers.js";
 import { attachMessageVoiceControl } from "./message-voice.js";
+import { applyModelOverrides } from "./models.js";
 import { updateSessionProjectSelect } from "./project-combo.js";
 import { currentPrefix, navigate, sessionPath } from "./router.js";
 import { settingsPath } from "./routes.js";
-import { updateSandboxImageUI, updateSandboxUI } from "./sandbox.js";
+import { refreshSandboxFromContext, updateSandboxImageUI, updateSandboxUI } from "./sandbox.js";
 import * as S from "./state.js";
-import { applyModelOverrides } from "./models.js";
 import { modelStore } from "./stores/model-store.js";
 import { projectStore } from "./stores/project-store.js";
 import {
@@ -391,10 +391,11 @@ function restoreSessionState(entry, projectId) {
 	S.setSessionExecMode(effectiveSandboxRoute ? "sandbox" : "host");
 	S.setSessionExecPromptSymbol(effectiveSandboxRoute || S.hostExecIsRoot ? "#" : "$");
 	updateCommandInputUI();
-	// Apply model overrides to sync MCP/think/sandbox from config.
-	// This ensures per-model settings are authoritative over stale session metadata.
+	// Apply session-scoped model defaults, then ask the backend for the effective
+	// sandbox route. Sandbox priority is explicit session > model > global.
 	if (entry.model) {
 		applyModelOverrides(entry.model);
+		refreshSandboxFromContext();
 	} else {
 		restoreMcpToggle(!entry.mcpDisabled);
 		restoreThinkToggle(entry.thinking_enabled === true);

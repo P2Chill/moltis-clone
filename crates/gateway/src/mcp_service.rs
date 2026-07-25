@@ -120,6 +120,13 @@ fn parse_server_config(
         .or_else(|| existing.map(|cfg| cfg.enabled))
         .unwrap_or(true);
 
+    let request_timeout_secs = params
+        .get("request_timeout_secs")
+        .and_then(Value::as_u64)
+        .or_else(|| existing.map(|cfg| cfg.request_timeout_secs))
+        .unwrap_or_else(|| moltis_mcp::McpServerConfig::default().request_timeout_secs)
+        .max(1);
+
     let url = if params.get("url").is_some() {
         if params.get("url").is_some_and(Value::is_null) {
             None
@@ -179,6 +186,7 @@ fn parse_server_config(
         args,
         env,
         enabled,
+        request_timeout_secs,
         transport,
         url,
         oauth,
@@ -601,6 +609,25 @@ mod tests {
         assert!(matches!(cfg.transport, moltis_mcp::TransportType::Sse));
         assert_eq!(cfg.url.as_deref(), Some("https://mcp.linear.app/mcp"));
         assert!(!cfg.enabled);
+    }
+
+    #[test]
+    fn parse_server_config_preserves_custom_request_timeout() {
+        let existing = moltis_mcp::McpServerConfig {
+            command: "slow-server".to_string(),
+            request_timeout_secs: 300,
+            ..Default::default()
+        };
+
+        let cfg = parse_server_config(
+            &serde_json::json!({
+                "enabled": false
+            }),
+            Some(&existing),
+        )
+        .unwrap();
+
+        assert_eq!(cfg.request_timeout_secs, 300);
     }
 
     #[test]

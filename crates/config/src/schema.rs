@@ -1102,6 +1102,9 @@ pub struct McpServerEntry {
     /// Whether this server is enabled. Defaults to true.
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// Maximum time to wait for one MCP request. Defaults to 60 seconds.
+    #[serde(default = "default_mcp_request_timeout_secs")]
+    pub request_timeout_secs: u64,
     /// Transport type: "stdio" (default) or "sse".
     #[serde(default)]
     pub transport: String,
@@ -1111,6 +1114,10 @@ pub struct McpServerEntry {
     /// Manual OAuth override for servers that don't support standard discovery.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oauth: Option<McpOAuthOverrideEntry>,
+}
+
+fn default_mcp_request_timeout_secs() -> u64 {
+    60
 }
 
 /// Manual OAuth configuration override for an MCP server.

@@ -7,6 +7,7 @@ use std::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
+    time::Duration,
 };
 
 use {
@@ -30,6 +31,7 @@ pub struct StdioTransport {
     stdin: Mutex<tokio::process::ChildStdin>,
     pending: Arc<Mutex<HashMap<String, oneshot::Sender<JsonRpcResponse>>>>,
     next_id: AtomicU64,
+    request_timeout: Duration,
     /// Handle to the reader task so we can abort on drop.
     reader_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
@@ -40,6 +42,7 @@ impl StdioTransport {
         command: &str,
         args: &[String],
         env: &HashMap<String, String>,
+        request_timeout: Duration,
     ) -> Result<Arc<Self>> {
         info!(
             command = %command,
@@ -71,6 +74,7 @@ impl StdioTransport {
             stdin: Mutex::new(stdin),
             pending: Arc::clone(&pending),
             next_id: AtomicU64::new(1),
+            request_timeout,
             reader_handle: Mutex::new(None),
         });
 
@@ -171,10 +175,14 @@ impl McpTransport for StdioTransport {
             stdin.flush().await?;
         }
 
-        let resp = tokio::time::timeout(std::time::Duration::from_secs(30), rx)
+        let timeout_secs = self.request_timeout.as_secs();
+        let resp = tokio::time::timeout(self.request_timeout, rx)
             .await
             .with_context(|| {
-                format!("MCP request '{method}' timed out after 30s (no response from server)")
+                format!(
+                    "MCP request '{method}' timed out after {timeout_secs}s \
+                     (no response from server)"
+                )
             })?
             .with_context(|| {
                 format!("MCP reader task dropped while waiting for '{method}' response")
@@ -229,7 +237,8 @@ mod tests {
     #[tokio::test]
     async fn test_spawn_and_kill() {
         // Spawn a simple process that reads stdin (cat will echo back).
-        let transport = StdioTransport::spawn("cat", &[], &HashMap::new())
+        let transport =
+            StdioTransport::spawn("cat", &[], &HashMap::new(), Duration::from_secs(30))
             .await
             .unwrap();
         assert!(transport.is_alive().await);
@@ -241,8 +250,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_spawn_nonexistent_command() {
-        let result =
-            StdioTransport::spawn("nonexistent_command_xyz_42", &[], &HashMap::new()).await;
+        let result = StdioTransport::spawn(
+            "nonexistent_command_xyz_42",
+            &[],
+            &HashMap::new(),
+            Duration::from_secs(30),
+        )
+        .await;
         assert!(result.is_err());
     }
 }

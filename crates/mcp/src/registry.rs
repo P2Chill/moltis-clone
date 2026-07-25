@@ -42,6 +42,9 @@ pub struct McpServerConfig {
     pub env: HashMap<String, String>,
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// Maximum time to wait for one MCP request.
+    #[serde(default = "default_request_timeout_secs")]
+    pub request_timeout_secs: u64,
     #[serde(default)]
     pub transport: TransportType,
     /// URL for SSE transport. Required when `transport` is `Sse`.
@@ -56,6 +59,10 @@ fn default_true() -> bool {
     true
 }
 
+fn default_request_timeout_secs() -> u64 {
+    60
+}
+
 impl Default for McpServerConfig {
     fn default() -> Self {
         Self {
@@ -63,6 +70,7 @@ impl Default for McpServerConfig {
             args: Vec::new(),
             env: HashMap::new(),
             enabled: true,
+            request_timeout_secs: default_request_timeout_secs(),
             transport: TransportType::default(),
             url: None,
             oauth: None,
@@ -221,6 +229,20 @@ mod tests {
         assert_eq!(parsed.servers.len(), 1);
         assert_eq!(parsed.servers["fs"].command, "mcp-server-filesystem");
         assert_eq!(parsed.servers["fs"].args, vec!["/tmp"]);
+        assert_eq!(parsed.servers["fs"].request_timeout_secs, 60);
+    }
+
+    #[test]
+    fn test_registry_request_timeout_roundtrip() {
+        let config = McpServerConfig {
+            command: "slow-mcp".into(),
+            request_timeout_secs: 300,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        let parsed: McpServerConfig = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed.request_timeout_secs, 300);
     }
 
     #[test]

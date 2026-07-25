@@ -5014,12 +5014,19 @@ pub enum SandboxEvent {
     ProvisionFailed { container: String, error: String },
 }
 
-/// Routes sandbox decisions per-session, with per-session overrides on top of global config.
+/// Routes sandbox decisions per-session, with explicit session overrides and
+/// transient model overrides on top of global config.
 pub struct SandboxRouter {
     config: SandboxConfig,
     backend: Arc<dyn Sandbox>,
-    /// Per-session overrides: true = sandboxed, false = direct execution.
+    /// Explicit per-session overrides persisted by `/sandbox on|off`.
     overrides: RwLock<HashMap<String, bool>>,
+    /// Transient per-session overrides derived from the currently selected model.
+    ///
+    /// These must remain separate from explicit overrides: writing model state
+    /// into `overrides` makes it sticky across model changes and can make the UI
+    /// report direct execution while tools still run in a sandbox.
+    model_overrides: RwLock<HashMap<String, bool>>,
     /// Per-session image overrides.
     image_overrides: RwLock<HashMap<String, String>>,
     /// Runtime override for the global default image (set via API, persisted externally).
@@ -5044,6 +5051,7 @@ impl SandboxRouter {
             config,
             backend,
             overrides: RwLock::new(HashMap::new()),
+            model_overrides: RwLock::new(HashMap::new()),
             image_overrides: RwLock::new(HashMap::new()),
             global_image_override: RwLock::new(None),
             event_tx,
@@ -5059,6 +5067,7 @@ impl SandboxRouter {
             config,
             backend,
             overrides: RwLock::new(HashMap::new()),
+            model_overrides: RwLock::new(HashMap::new()),
             image_overrides: RwLock::new(HashMap::new()),
             global_image_override: RwLock::new(None),
             event_tx,
@@ -5091,10 +5100,30 @@ impl SandboxRouter {
         self.prepared_sessions.write().await.remove(session_key);
     }
 
+    fn global_mode_is_sandboxed(&self, session_key: &str) -> bool {
+        match self.config.mode {
+            SandboxMode::Off => false,
+            SandboxMode::All => true,
+            SandboxMode::NonMain => session_key != "main",
+        }
+    }
+
+    /// Resolve persisted session state without considering the active model.
+    pub async fn configured_is_sandboxed(&self, session_key: &str) -> bool {
+        if !self.backend.is_real() {
+            return false;
+        }
+        if let Some(&override_val) = self.overrides.read().await.get(session_key) {
+            return override_val;
+        }
+        self.global_mode_is_sandboxed(session_key)
+    }
+
     /// Check whether a session should run sandboxed.
-    /// Returns `false` when no real container runtime is available, regardless of
-    /// config mode or per-session overrides. Otherwise, per-session override takes
-    /// priority, then falls back to global mode.
+    ///
+    /// Explicit session state has highest priority, followed by the transient
+    /// model policy and finally the global mode. Returns `false` when no real
+    /// sandbox backend is available.
     pub async fn is_sandboxed(&self, session_key: &str) -> bool {
         if !self.backend.is_real() {
             return false;
@@ -5102,11 +5131,10 @@ impl SandboxRouter {
         if let Some(&override_val) = self.overrides.read().await.get(session_key) {
             return override_val;
         }
-        match self.config.mode {
-            SandboxMode::Off => false,
-            SandboxMode::All => true,
-            SandboxMode::NonMain => session_key != "main",
+        if let Some(&override_val) = self.model_overrides.read().await.get(session_key) {
+            return override_val;
         }
+        self.global_mode_is_sandboxed(session_key)
     }
 
     /// Set a per-session sandbox override.
@@ -5120,6 +5148,16 @@ impl SandboxRouter {
     /// Remove a per-session override (revert to global mode).
     pub async fn remove_override(&self, session_key: &str) {
         self.overrides.write().await.remove(session_key);
+    }
+
+    /// Set or clear the transient sandbox policy derived from the active model.
+    pub async fn set_model_override(&self, session_key: &str, enabled: Option<bool>) {
+        let mut overrides = self.model_overrides.write().await;
+        if let Some(enabled) = enabled {
+            overrides.insert(session_key.to_string(), enabled);
+        } else {
+            overrides.remove(session_key);
+        }
     }
 
     /// Derive a SandboxId for a given session key.
@@ -5146,6 +5184,7 @@ impl SandboxRouter {
         let id = self.sandbox_id_for(session_key);
         self.backend.cleanup(&id).await?;
         self.remove_override(session_key).await;
+        self.set_model_override(session_key, None).await;
         self.clear_prepared_session(session_key).await;
         Ok(())
     }
@@ -5651,6 +5690,37 @@ mod tests {
         // Override to disable sandbox for main
         router.set_override("main", false).await;
         assert!(!router.is_sandboxed("main").await);
+    }
+
+    #[tokio::test]
+    async fn test_sandbox_router_explicit_override_wins_model_policy() {
+        let config = SandboxConfig {
+            mode: SandboxMode::All,
+            ..Default::default()
+        };
+        let router = router_with_real_backend(config);
+
+        router.set_override("main", false).await;
+        router.set_model_override("main", Some(true)).await;
+
+        assert!(!router.is_sandboxed("main").await);
+        assert!(!router.configured_is_sandboxed("main").await);
+    }
+
+    #[tokio::test]
+    async fn test_sandbox_router_model_policy_is_transient() {
+        let config = SandboxConfig {
+            mode: SandboxMode::All,
+            ..Default::default()
+        };
+        let router = router_with_real_backend(config);
+
+        router.set_model_override("main", Some(false)).await;
+        assert!(!router.is_sandboxed("main").await);
+        assert!(router.configured_is_sandboxed("main").await);
+
+        router.set_model_override("main", None).await;
+        assert!(router.is_sandboxed("main").await);
     }
 
     #[tokio::test]

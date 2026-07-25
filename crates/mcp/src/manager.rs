@@ -120,6 +120,8 @@ impl McpManager {
     pub async fn start_server(&self, name: &str, config: &McpServerConfig) -> Result<()> {
         // Shut down existing connection if any.
         self.stop_server(name).await;
+        let request_timeout =
+            std::time::Duration::from_secs(config.request_timeout_secs.max(1));
 
         // Network work happens outside the lock.
         let (client, auth_provider) = match config.transport {
@@ -152,12 +154,17 @@ impl McpManager {
                     config.oauth.is_some(),
                     has_stored_token,
                 ) {
-                    let client =
-                        McpClient::connect_sse_with_auth(name, url, auth_provider.clone()).await?;
+                    let client = McpClient::connect_sse_with_auth(
+                        name,
+                        url,
+                        auth_provider.clone(),
+                        request_timeout,
+                    )
+                    .await?;
                     (client, Some(auth_provider))
                 } else {
                     // No hint that auth is needed yet, probe unauthenticated first.
-                    match McpClient::connect_sse(name, url).await {
+                    match McpClient::connect_sse(name, url, request_timeout).await {
                         Ok(client) => (client, None),
                         Err(e) => {
                             // Check if it's a 401 Unauthorized.
@@ -189,6 +196,7 @@ impl McpManager {
                                     name,
                                     url,
                                     auth_provider.clone(),
+                                    request_timeout,
                                 )
                                 .await?;
                                 (client, Some(auth_provider))
@@ -200,8 +208,14 @@ impl McpManager {
                 }
             },
             TransportType::Stdio => {
-                let client =
-                    McpClient::connect(name, &config.command, &config.args, &config.env).await?;
+                let client = McpClient::connect(
+                    name,
+                    &config.command,
+                    &config.args,
+                    &config.env,
+                    request_timeout,
+                )
+                .await?;
                 (client, None)
             },
         };

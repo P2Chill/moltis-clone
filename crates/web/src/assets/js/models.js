@@ -3,12 +3,12 @@
 import { sendRpc } from "./helpers.js";
 import { t } from "./i18n.js";
 import { showModelNotice, updateMcpToggleUI, updateThinkToggleUI } from "./page-chat.js";
-import { updateSandboxUI } from "./sandbox.js";
+import { refreshSandboxFromContext } from "./sandbox.js";
 import * as S from "./state.js";
 import { modelStore } from "./stores/model-store.js";
 
 function setSessionModel(sessionKey, modelId) {
-	sendRpc("sessions.patch", { key: sessionKey, model: modelId });
+	return sendRpc("sessions.patch", { key: sessionKey, model: modelId });
 }
 
 export { setSessionModel };
@@ -40,12 +40,15 @@ export function selectModel(m) {
 	S.setSelectedModelId(m.id);
 	updateModelComboLabel(m);
 	localStorage.setItem("moltis-model", m.id);
-	setSessionModel(S.activeSessionKey, m.id);
 	closeModelDropdown();
 	// Show notice if model doesn't support tools
 	showModelNotice(m);
-	// Apply per-model overrides (MCP, sandbox) to the active session
-	applyModelOverrides(m.id);
+	setSessionModel(S.activeSessionKey, m.id).then(() => {
+		// MCP and thinking are session settings. Sandbox policy remains a
+		// separate effective layer: explicit session > model > global.
+		applyModelOverrides(m.id);
+		refreshSandboxFromContext();
+	});
 }
 
 export function applyModelOverrides(modelId) {
@@ -53,27 +56,21 @@ export function applyModelOverrides(modelId) {
 	sendRpc("tools.model_overrides.get", {}).then((res) => {
 		if (!res?.ok) return;
 		var overrides = res.payload?.overrides || {};
-		var key = Object.keys(overrides).find(function(k) {
-			return k.toLowerCase() === overrideKey.toLowerCase();
-		});
+		var key = Object.keys(overrides).find((k) => k.toLowerCase() === overrideKey.toLowerCase());
 		var ov = key ? overrides[key] : {};
 		var mcpEnabled = ov.mcp_enabled ?? true;
-		var sandboxEnabled = ov.sandbox_enabled ?? false;
-		// Only patch session when values actually differ to avoid spamming
-		// "Sandbox enabled/disabled" system messages on every model switch.
+		var thinkingEnabled = ov.thinking_enabled ?? false;
+		// Only patch session-scoped values when they actually differ.
 		var patch = {};
 		var mcpLabel = S.$("mcpToggleLabel");
 		var currentMcpEnabled = mcpLabel ? mcpLabel.textContent === "MCP" : true;
 		if (mcpEnabled !== currentMcpEnabled) patch.mcpDisabled = !mcpEnabled;
-		if (sandboxEnabled !== S.sessionSandboxEnabled) patch.sandboxEnabled = sandboxEnabled;
+		if (thinkingEnabled !== false) patch.thinkingEnabled = thinkingEnabled;
 		if (Object.keys(patch).length > 0) {
 			patch.key = S.activeSessionKey;
 			sendRpc("sessions.patch", patch);
 		}
-		var thinkingEnabled = ov.thinking_enabled ?? false;
-		if (thinkingEnabled !== false) patch.thinkingEnabled = thinkingEnabled;
 		updateMcpToggleUI(mcpEnabled);
-		updateSandboxUI(sandboxEnabled);
 		updateThinkToggleUI(thinkingEnabled);
 	});
 }

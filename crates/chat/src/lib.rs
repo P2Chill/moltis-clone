@@ -1155,6 +1155,8 @@ async fn build_prompt_runtime_context(
 ) -> PromptRuntimeContext {
     let data_dir = moltis_config::data_dir();
     let data_dir_display = data_dir.display().to_string();
+    let config = moltis_config::discover_and_load();
+    sync_model_sandbox_override(state, session_key, Some(provider.id()), &config).await;
 
     let sudo_fut = detect_host_sudo_access();
     let sandbox_fut = async {
@@ -1432,6 +1434,38 @@ fn prompt_sandbox_no_network_state(backend: &str, configured_no_network: bool) -
         // failover wrappers may switch backends dynamically.
         _ => None,
     }
+}
+
+fn model_sandbox_override(
+    config: &moltis_config::MoltisConfig,
+    model_id: Option<&str>,
+) -> Option<bool> {
+    let model_lower = model_id?.to_lowercase();
+    config
+        .tools
+        .model_overrides
+        .iter()
+        .find_map(|(key, policy)| {
+            model_lower
+                .contains(&key.to_lowercase())
+                .then_some(policy.sandbox_enabled)
+                .flatten()
+        })
+}
+
+async fn sync_model_sandbox_override(
+    state: &Arc<dyn ChatRuntime>,
+    session_key: &str,
+    model_id: Option<&str>,
+    config: &moltis_config::MoltisConfig,
+) -> bool {
+    let Some(router) = state.sandbox_router() else {
+        return false;
+    };
+    router
+        .set_model_override(session_key, model_sandbox_override(config, model_id))
+        .await;
+    router.is_sandboxed(session_key).await
 }
 
 fn effective_tool_policy(config: &moltis_config::MoltisConfig) -> ToolPolicy {
@@ -2892,6 +2926,20 @@ impl ChatService for LiveChatService {
                             },
                         }
                     });
+
+            let session_model = self
+                .session_metadata
+                .get(&session_key)
+                .await
+                .and_then(|entry| entry.model);
+            let config = moltis_config::discover_and_load();
+            sync_model_sandbox_override(
+                &self.state,
+                &session_key,
+                session_model.as_deref(),
+                &config,
+            )
+            .await;
 
             info!(
                 run_id = %run_id,
@@ -4462,9 +4510,9 @@ impl ChatService for LiveChatService {
             }
         };
 
-        // Sandbox info: session metadata override > per-model override > router default.
+        // Sandbox info: explicit session override > model policy > global mode.
         let sandbox_info = if let Some(router) = self.state.sandbox_router() {
-            let router_sandboxed = router.is_sandboxed(&session_key).await;
+            let configured_sandboxed = router.configured_is_sandboxed(&session_key).await;
 
             // Session metadata override (set by /sandbox on|off) takes highest priority.
             let session_sandbox_override = session_entry
@@ -4475,25 +4523,9 @@ impl ChatService for LiveChatService {
                 // User explicitly toggled sandbox for this session.
                 session_val
             } else {
-                // Fall back to per-model override, then router default.
+                // Fall back to per-model override, then global mode.
                 let session_model = session_entry.as_ref().and_then(|e| e.model.as_deref());
-                let effective_model = session_model.or_else(|| {
-                    // No session model yet — use the default (first) provider.
-                    None
-                });
-                if let Some(mid) = effective_model {
-                    let mid_lower = mid.to_lowercase();
-                    let model_override = config.tools.model_overrides.iter().find_map(|(key, ov)| {
-                        if mid_lower.contains(&key.to_lowercase()) {
-                            ov.sandbox_enabled
-                        } else {
-                            None
-                        }
-                    });
-                    model_override.unwrap_or(router_sandboxed)
-                } else {
-                    router_sandboxed
-                }
+                model_sandbox_override(&config, session_model).unwrap_or(configured_sandboxed)
             };
             let config = router.config();
             let session_image = session_entry.as_ref().and_then(|e| e.sandbox_image.clone());
@@ -5978,30 +6010,10 @@ async fn run_with_tools(
     let system_prompt =
         apply_voice_reply_suffix(system_prompt, desired_reply_medium, runtime_context);
 
-    // Determine sandbox mode for this session.
-    let session_is_sandboxed = {
-        let base = if let Some(router) = state.sandbox_router() {
-            router.is_sandboxed(session_key).await
-        } else {
-            false
-        };
-        // Per-model sandbox_enabled overrides the session setting.
-        let mid_lower = model_id.to_lowercase();
-        let model_sandbox_override = persona.config.tools.model_overrides.iter().find_map(|(key, ov)| {
-            if mid_lower.contains(&key.to_lowercase()) {
-                ov.sandbox_enabled
-            } else {
-                None
-            }
-        });
-        model_sandbox_override.unwrap_or(base)
-    };
-
-    // Push per-model sandbox override into the router so exec/browser tools
-    // (which re-check is_sandboxed independently) see the resolved value.
-    if let Some(router) = state.sandbox_router() {
-        router.set_override(session_key, session_is_sandboxed).await;
-    }
+    // Synchronize the selected model's transient policy without overwriting
+    // the user's persisted `/sandbox on|off` choice.
+    let session_is_sandboxed =
+        sync_model_sandbox_override(state, session_key, Some(model_id), &persona.config).await;
 
     // Resolve extended thinking for this session+model.
     let thinking_enabled = {
@@ -9024,6 +9036,30 @@ mod tests {
     }
 
     #[test]
+    fn model_sandbox_override_matches_provider_qualified_model() {
+        let mut config = moltis_config::MoltisConfig::default();
+        config.tools.model_overrides.insert(
+            "claude-sonnet-5".to_string(),
+            moltis_config::schema::ToolPolicyConfig {
+                sandbox_enabled: Some(false),
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(
+            model_sandbox_override(
+                &config,
+                Some("anthropic::claude-sonnet-5")
+            ),
+            Some(false)
+        );
+        assert_eq!(
+            model_sandbox_override(&config, Some("anthropic::claude-opus-5")),
+            None
+        );
+    }
+
+    #[test]
     fn prompt_now_for_timezone_returns_non_empty_string() {
         let value = prompt_now_for_timezone(Some("UTC"));
         assert!(!value.is_empty());
@@ -9102,6 +9138,7 @@ mod tests {
             parent_session_key: None,
             fork_point: None,
             mcp_disabled: None,
+            thinking_enabled: None,
             preview: None,
             agent_id: None,
             version: 0,
@@ -9370,6 +9407,7 @@ mod tests {
                     moltis_channels::StreamEvent::Done | moltis_channels::StreamEvent::Error(_) => {
                         break;
                     },
+                    _ => {},
                 }
             }
             self.completions.fetch_add(1, Ordering::SeqCst);

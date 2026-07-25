@@ -1,4 +1,10 @@
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    collections::HashSet,
+    ffi::{OsStr, OsString},
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 
 #[cfg(feature = "metrics")]
 use std::time::Instant;
@@ -88,6 +94,33 @@ fn truncate_output_for_display(output: &mut String, max_output_bytes: usize) {
     output.push_str("\n... [output truncated]");
 }
 
+/// Build the deterministic PATH used for commands that execute on the host.
+///
+/// Moltis is commonly launched by systemd, cron, or another non-login process,
+/// so shell startup files are intentionally not sourced. Add conventional
+/// per-user executable directories while preserving every inherited entry.
+fn host_command_path(existing: &OsStr, home: Option<&Path>) -> OsString {
+    let mut seen = HashSet::new();
+    let mut paths = Vec::new();
+
+    if let Some(home) = home {
+        for relative in [".local/bin", "bin", ".cargo/bin"] {
+            let path = home.join(relative);
+            if seen.insert(path.clone()) {
+                paths.push(path);
+            }
+        }
+    }
+
+    for path in std::env::split_paths(existing) {
+        if seen.insert(path.clone()) {
+            paths.push(path);
+        }
+    }
+
+    std::env::join_paths(paths).unwrap_or_else(|_| existing.to_os_string())
+}
+
 /// Execute a shell command with timeout and output limits.
 pub async fn exec_command(command: &str, opts: &ExecOpts) -> Result<ExecResult> {
     debug!(
@@ -98,6 +131,9 @@ pub async fn exec_command(command: &str, opts: &ExecOpts) -> Result<ExecResult> 
 
     let mut cmd = Command::new("sh");
     cmd.arg("-c").arg(command);
+    let inherited_path = std::env::var_os("PATH").unwrap_or_default();
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    cmd.env("PATH", host_command_path(&inherited_path, home.as_deref()));
 
     if let Some(ref dir) = opts.working_dir {
         cmd.current_dir(dir);
@@ -1340,6 +1376,54 @@ mod tests {
             msg.contains("working directory"),
             "error should mention 'working directory', got: {msg}"
         );
+    }
+
+    #[test]
+    fn host_command_path_adds_user_local_bins_without_duplicates() {
+        let path = host_command_path(
+            OsStr::new("/usr/local/bin:/usr/bin:/home/test/.local/bin"),
+            Some(Path::new("/home/test")),
+        );
+        let entries: Vec<_> = std::env::split_paths(&path).collect();
+
+        assert_eq!(entries[0], PathBuf::from("/home/test/.local/bin"));
+        assert_eq!(entries[1], PathBuf::from("/home/test/bin"));
+        assert_eq!(entries[2], PathBuf::from("/home/test/.cargo/bin"));
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|entry| **entry == PathBuf::from("/home/test/.local/bin"))
+                .count(),
+            1
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn exec_command_resolves_user_local_binary_with_non_login_path() {
+        use std::{fs, os::unix::fs::PermissionsExt};
+
+        let home = tempfile::tempdir().unwrap();
+        let bin_dir = home.path().join(".local/bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+        let tool = bin_dir.join("moltis-user-tool");
+        fs::write(&tool, "#!/bin/sh\nprintf user-tool-found\n").unwrap();
+        let mut permissions = fs::metadata(&tool).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&tool, permissions).unwrap();
+
+        let path = host_command_path(OsStr::new("/usr/bin:/bin"), Some(home.path()));
+        let opts = ExecOpts {
+            env: vec![
+                ("HOME".to_string(), home.path().display().to_string()),
+                ("PATH".to_string(), path.to_string_lossy().into_owned()),
+            ],
+            ..Default::default()
+        };
+        let result = exec_command("moltis-user-tool", &opts).await.unwrap();
+
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, "user-tool-found");
     }
 
     #[tokio::test]

@@ -1409,6 +1409,7 @@ pub async fn prepare_gateway(
                         args: entry.args.clone(),
                         env: entry.env.clone(),
                         enabled: entry.enabled,
+                        request_timeout_secs: entry.request_timeout_secs,
                         transport,
                         url: entry.url.clone(),
                         oauth,

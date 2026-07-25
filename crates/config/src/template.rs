@@ -443,6 +443,7 @@ auto_load = []                    # Skills to always load without explicit activ
 # args = ["-y", "@package/name"]  # Command arguments
 # env = {{ KEY = "value" }}         # Environment variables for the process
 # enabled = true                  # Whether this server is enabled
+# request_timeout_secs = 60       # Per-request timeout; raise for long-running tools
 # transport = "stdio"             # Transport: "stdio" (default) or "sse"
 # url = "http://..."              # URL for SSE transport
 

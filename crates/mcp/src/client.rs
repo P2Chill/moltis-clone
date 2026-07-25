@@ -1,6 +1,6 @@
 //! MCP client: manages the protocol handshake and tool interactions with a single MCP server.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use tracing::{debug, info, warn};
 
@@ -51,9 +51,10 @@ impl McpClient {
         command: &str,
         args: &[String],
         env: &HashMap<String, String>,
+        request_timeout: Duration,
     ) -> Result<Self> {
         info!(server = %server_name, command = %command, args = ?args, "connecting to MCP server");
-        let transport = StdioTransport::spawn(command, args, env).await?;
+        let transport = StdioTransport::spawn(command, args, env, request_timeout).await?;
 
         let mut client = Self {
             server_name: server_name.into(),
@@ -80,9 +81,13 @@ impl McpClient {
     }
 
     /// Connect to a remote MCP server over HTTP/SSE.
-    pub async fn connect_sse(server_name: &str, url: &str) -> Result<Self> {
+    pub async fn connect_sse(
+        server_name: &str,
+        url: &str,
+        request_timeout: Duration,
+    ) -> Result<Self> {
         info!(server = %server_name, url = %url, "connecting to MCP server via SSE");
-        let transport = SseTransport::new(url)?;
+        let transport = SseTransport::with_timeout(url, request_timeout)?;
 
         let mut client = Self {
             server_name: server_name.into(),
@@ -104,9 +109,10 @@ impl McpClient {
         server_name: &str,
         url: &str,
         auth: SharedAuthProvider,
+        request_timeout: Duration,
     ) -> Result<Self> {
         info!(server = %server_name, url = %url, "connecting to MCP server via SSE (with auth)");
-        let transport = SseTransport::with_auth(url, auth)?;
+        let transport = SseTransport::with_auth_timeout(url, auth, request_timeout)?;
 
         let mut client = Self {
             server_name: server_name.into(),

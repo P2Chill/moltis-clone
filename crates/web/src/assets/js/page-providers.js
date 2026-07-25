@@ -10,6 +10,7 @@ import { t } from "./i18n.js";
 import { fetchModels } from "./models.js";
 import { updateNavCount } from "./nav-counts.js";
 import { openModelSelectorForProvider, openProviderModal } from "./providers.js";
+import { refreshSandboxFromContext } from "./sandbox.js";
 import { connected } from "./signals.js";
 import * as S from "./state.js";
 import { ConfirmDialog, requestConfirm } from "./ui.js";
@@ -69,7 +70,11 @@ function handleModelsUpdatedEvent(payload) {
 
 function fetchProviders() {
 	loading.value = true;
-	return Promise.all([sendRpc("models.list_all", {}), sendRpc("providers.available", {}), sendRpc("tools.model_overrides.get", {})])
+	return Promise.all([
+		sendRpc("models.list_all", {}),
+		sendRpc("providers.available", {}),
+		sendRpc("tools.model_overrides.get", {}),
+	])
 		.then(([modelsRes, providersRes, overridesRes]) => {
 			loading.value = false;
 			if (overridesRes?.ok) modelOverrides.value = overridesRes.payload?.overrides || {};
@@ -203,7 +208,7 @@ function getOverrideKeyForModel(modelId) {
 function getModelOverrideValues(modelId) {
 	var stripped = modelId.split("::").pop().toLowerCase();
 	var overrides = modelOverrides.value;
-	var key = Object.keys(overrides).find(function(k) { return k.toLowerCase() === stripped; });
+	var key = Object.keys(overrides).find((k) => k.toLowerCase() === stripped);
 	return key ? overrides[key] : {};
 }
 
@@ -221,13 +226,14 @@ function cycleTrustPill(modelId, field) {
 			if (!updated[overrideKey]) updated[overrideKey] = {};
 			updated[overrideKey] = { ...updated[overrideKey], [field]: next };
 			modelOverrides.value = updated;
-			// Sync to active session so the chat toolbar reflects the change
+			// Sync session-scoped defaults for the active model. Sandbox policy
+			// is evaluated separately so an explicit session choice still wins.
 			var selected = (S.selectedModelId || "").split("::").pop();
 			if (selected && selected.toLowerCase() === overrideKey.toLowerCase()) {
 				if (field === "mcp_enabled") {
 					sendRpc("sessions.patch", { key: S.activeSessionKey, mcpDisabled: !next });
 				} else if (field === "sandbox_enabled") {
-					sendRpc("sessions.patch", { key: S.activeSessionKey, sandboxEnabled: next });
+					refreshSandboxFromContext();
 				} else if (field === "thinking_enabled") {
 					sendRpc("sessions.patch", { key: S.activeSessionKey, thinkingEnabled: next });
 				}
@@ -241,11 +247,15 @@ function TrustPill({ label, value, onCycle }) {
 	var base = "cursor:pointer;font-size:10px;padding:1px 6px;border-radius:9999px;border:1px solid;user-select:none;";
 	var style, title, text;
 	if (value === true) {
-		style = base + "background:color-mix(in srgb,var(--accent,#3b82f6) 18%,transparent);border-color:var(--accent,#3b82f6);color:var(--accent,#3b82f6);";
+		style =
+			base +
+			"background:color-mix(in srgb,var(--accent,#3b82f6) 18%,transparent);border-color:var(--accent,#3b82f6);color:var(--accent,#3b82f6);";
 		title = label + ": forced ON (click to cycle)";
 		text = label + " \u2713";
 	} else if (value === false) {
-		style = base + "background:color-mix(in srgb,var(--danger,#ef4444) 15%,transparent);border-color:var(--danger,#ef4444);color:var(--danger,#ef4444);";
+		style =
+			base +
+			"background:color-mix(in srgb,var(--danger,#ef4444) 15%,transparent);border-color:var(--danger,#ef4444);color:var(--danger,#ef4444);";
 		title = label + ": forced OFF (click to cycle)";
 		text = label + " \u2717";
 	} else {
@@ -253,7 +263,10 @@ function TrustPill({ label, value, onCycle }) {
 		title = label + ": inherit default (click to override)";
 		text = label;
 	}
-	return html`<button style=${style} title=${title} onClick=${(e) => { e.stopPropagation(); onCycle(); }}>${text}</button>`;
+	return html`<button style=${style} title=${title} onClick=${(e) => {
+		e.stopPropagation();
+		onCycle();
+	}}>${text}</button>`;
 }
 
 function ProviderSection(props) {

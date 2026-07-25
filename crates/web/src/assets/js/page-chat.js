@@ -13,7 +13,7 @@ import {
 	initMediaDrop,
 	teardownMediaDrop,
 } from "./media-drop.js";
-import { bindModelComboEvents, setSessionModel, openModelDropdown } from "./models.js";
+import { bindModelComboEvents, openModelDropdown, setSessionModel } from "./models.js";
 import { registerPrefix, sessionPath } from "./router.js";
 import { routes } from "./routes.js";
 import { bindSandboxImageEvents, bindSandboxToggleEvents, updateSandboxImageUI, updateSandboxUI } from "./sandbox.js";
@@ -27,7 +27,7 @@ import {
 	switchSession,
 } from "./sessions.js";
 import * as S from "./state.js";
-import { initVoiceInput, initVadButton, teardownVoiceInput } from "./voice-input.js";
+import { initVadButton, initVoiceInput, teardownVoiceInput } from "./voice-input.js";
 
 // ── Slash commands ───────────────────────────────────────
 var slashCommands = [
@@ -860,7 +860,7 @@ function handleSlashCommand(cmdName, cmdArgs) {
 	if (cmdName === "sandbox") {
 		var newSandbox = !S.sessionSandboxEnabled;
 		sendRpc("sessions.patch", { key: S.activeSessionKey, sandboxEnabled: newSandbox }).then((r) => {
-			if (r?.ok) updateSandboxUI(newSandbox);
+			if (r?.ok) updateSandboxUI(r.payload?.sandbox_enabled ?? newSandbox);
 		});
 		return;
 	}
@@ -885,16 +885,21 @@ function handleSlashCommand(cmdName, cmdArgs) {
 function handleModelCommand(args) {
 	var parts = args.trim().split(/\s+/).filter(Boolean);
 
-	if (!S.activeSessionKey) { chatAddMsg("error", "No active session.", true); return; }
+	if (!S.activeSessionKey) {
+		chatAddMsg("error", "No active session.", true);
+		return;
+	}
 
 	sendRpc("models.list", {}).then((res) => {
-		if (!res?.ok || !Array.isArray(res.payload)) {
+		if (!(res?.ok && Array.isArray(res.payload))) {
 			chatAddMsg("error", "Could not load model list.", true);
 			return;
 		}
 		var models = res.payload;
 		var providers = [];
-		models.forEach((m) => { if (m.provider && !providers.includes(m.provider)) providers.push(m.provider); });
+		models.forEach((m) => {
+			if (m.provider && !providers.includes(m.provider)) providers.push(m.provider);
+		});
 
 		// No args — list providers
 		if (parts.length === 0) {
@@ -903,7 +908,8 @@ function handleModelCommand(args) {
 				var count = models.filter((m) => m.provider === p).length;
 				html += `${i + 1}. ${p} (${count} models)<br>`;
 			});
-			html += "<br><em>Use <code>/model &lt;provider&gt;</code> to list, <code>/model &lt;provider&gt; &lt;model&gt;</code> to switch.</em>";
+			html +=
+				"<br><em>Use <code>/model &lt;provider&gt;</code> to list, <code>/model &lt;provider&gt; &lt;model&gt;</code> to switch.</em>";
 			var el = chatAddMsg("system", html, true);
 			if (el) el.classList.add("system-list");
 			return;
@@ -915,7 +921,10 @@ function handleModelCommand(args) {
 		var provName = isNaN(provIdx)
 			? providers.find((p) => p.toLowerCase().includes(provArg.toLowerCase()))
 			: providers[provIdx - 1];
-		if (!provName) { chatAddMsg("error", `Provider '${provArg}' not found. Use /model to open picker.`, true); return; }
+		if (!provName) {
+			chatAddMsg("error", `Provider '${provArg}' not found. Use /model to open picker.`, true);
+			return;
+		}
 
 		var provModels = models.filter((m) => m.provider === provName);
 
@@ -938,7 +947,10 @@ function handleModelCommand(args) {
 		var chosen = isNaN(modelIdx)
 			? provModels.find((m) => (m.id + " " + (m.displayName || "")).toLowerCase().includes(modelArg.toLowerCase()))
 			: provModels[modelIdx - 1];
-		if (!chosen) { chatAddMsg("error", `Model '${modelArg}' not found in ${provName}.`, true); return; }
+		if (!chosen) {
+			chatAddMsg("error", `Model '${modelArg}' not found in ${provName}.`, true);
+			return;
+		}
 
 		sendRpc("sessions.patch", { key: S.activeSessionKey, model: chosen.id }).then((r) => {
 			if (r?.ok) {

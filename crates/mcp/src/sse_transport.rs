@@ -3,9 +3,12 @@
 //! Uses HTTP POST for JSON-RPC requests and GET for server-initiated SSE events.
 //! Supports optional OAuth Bearer token injection and automatic 401 retry.
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicU64, Ordering},
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
 };
 
 use {
@@ -42,8 +45,13 @@ pub struct SseTransport {
 impl SseTransport {
     /// Create a new SSE transport pointing at the given MCP server URL.
     pub fn new(url: &str) -> Result<Arc<Self>> {
+        Self::with_timeout(url, Duration::from_secs(60))
+    }
+
+    /// Create a new SSE transport with a custom request timeout.
+    pub fn with_timeout(url: &str, request_timeout: Duration) -> Result<Arc<Self>> {
         let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(60))
+            .timeout(request_timeout)
             .build()
             .context("failed to build HTTP client for SSE transport")?;
 
@@ -58,8 +66,17 @@ impl SseTransport {
 
     /// Create a new SSE transport with an OAuth auth provider.
     pub fn with_auth(url: &str, auth: SharedAuthProvider) -> Result<Arc<Self>> {
+        Self::with_auth_timeout(url, auth, Duration::from_secs(60))
+    }
+
+    /// Create an authenticated SSE transport with a custom request timeout.
+    pub fn with_auth_timeout(
+        url: &str,
+        auth: SharedAuthProvider,
+        request_timeout: Duration,
+    ) -> Result<Arc<Self>> {
         let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(60))
+            .timeout(request_timeout)
             .build()
             .context("failed to build HTTP client for SSE transport")?;
 
